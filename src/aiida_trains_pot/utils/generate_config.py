@@ -2,10 +2,10 @@
 
 
 def generate_lammps_md_config(
-    temperatures,
-    pressures,
-    steps,
-    styles,
+    temperatures = [0],
+    pressures = [0],
+    steps = [0],
+    styles = ['nve'],
     dt=0.001,
 ):
     """Generate a YAML-like configuration for a set of parameters.

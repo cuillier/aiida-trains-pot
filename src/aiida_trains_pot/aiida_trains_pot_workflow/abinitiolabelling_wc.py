@@ -2,10 +2,11 @@
 
 from aiida.common import AttributeDict
 from aiida.engine import WorkChain, append_, calcfunction, while_
-from aiida.orm import Dict, Group, Int, Str, StructureData, load_group
+from aiida.orm import Dict, Group, Int, Str, List, StructureData, load_group
 from aiida.plugins import DataFactory, WorkflowFactory
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
+from aiida_quantumespresso.data.hubbard_structure import HubbardStructureData
 
 PwBaseWorkChain = WorkflowFactory("quantumespresso.pw.base")
 PESData = DataFactory("pesdata")
@@ -32,6 +33,7 @@ def WriteLabelledDataset(non_labelled_structures, **labelled_data):
         labelled_dataset[-1]["dft_forces"] = value["output_trajectory"].get_array("forces")[0].tolist()
         stress = value["output_trajectory"].get_array("stress")[0] * gpa_to_eV_per_ang3
         labelled_dataset[-1]["dft_stress"] = stress.tolist()
+        #labelled_dataset[-1]["dft_magmom"] = value["output_parameters"]
 
     pes_labelled_dataset = PESData(labelled_dataset)
     return pes_labelled_dataset
@@ -46,6 +48,18 @@ class AbInitioLabellingWorkChain(WorkChain):
         super().define(spec)
         spec.input("unlabelled_dataset", valid_type=PESData, help="Structures to label.")
         spec.input("group_label", valid_type=Str, help="Label for group.", required=False)
+        spec.input(
+            "onsites_hubbard", 
+            valid_type=List, 
+            help="List of keyword arguments for HubbardStructureData.initialize_onsites_hubbard(). One Dict per atomic species.",
+            required=False,
+            default=lambda: List([]) )
+        spec.input(
+            "intersites_hubbard",
+            valid_type=List,
+            help="List of keyword arguments for HubbardStructureData.initialize_intersites_hubbard(). One Dict per pair.",
+            required=False,    
+            default=lambda: List([]) ) 
         spec.input(
             "batch_size",
             valid_type=Int,
@@ -101,7 +115,15 @@ class AbInitioLabellingWorkChain(WorkChain):
             self.ctx.config : self.ctx.config + self.inputs.batch_size.value
         ]:
             self.ctx.config += 1
-            str_data = StructureData(ase=structure)
+            str_data = StructureData(ase=structure)            
+
+            # Hubbard parameters
+            if self.inputs.onsites_hubbard or self.inputs.intersites_hubbard:
+                str_data = HubbardStructureData.from_structure(str_data) 
+            for hubbard_kwargs in self.inputs.onsites_hubbard:
+                str_data.initialize_onsites_hubbard(**hubbard_kwargs)
+            for hubbard_kwargs in self.inputs.intersites_hubbard:
+                str_data.initialize_intersites_hubbard(**hubbard_kwargs)
 
             # Prepare inputs
             inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace="quantumespresso"))
