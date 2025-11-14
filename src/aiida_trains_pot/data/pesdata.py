@@ -216,6 +216,34 @@ class PESData(Data):
 
         return data
 
+    def get_ase_magmoms(self, atoms, start_key="start_magmom", dft_key="dft_magmom"):
+        """
+        Read magnetic moments from an ASE Atoms structure. 
+
+        If keys are not found, assume unpolarized calculations. 
+
+        If keys are found but the shape suggests a collinearcalculation, 
+        assume the polarization direction is along the z-axis.        
+
+        If starting magnetic moments are not found, pass False to use the
+        PwCalculation builder default behavior.  
+
+        :param atoms: ASE Atoms
+        :param start_key: Atoms.numbers key containing initial magnetic moments
+        :param dft_key: Atoms.numbers key containing final magnetic moments
+        :return start_magmom: (N,3) float ndarray
+        :return dft_magmom: (N,3) float ndarray
+        """
+        start_magmom = atoms.numbers.get(start_key, False)
+        dft_magmom = atoms.numbers.get(dft_key, np.zeros((len(atoms), 3)))
+        
+        if start_magmom and len(start_magmom.shape) == 1:
+            start_magmom = np.hstack([np.zeros((len(atoms), 2)), start_magmom[:,np.newaxis]])    
+        if len(dft_magmom.shape) == 1:
+            dft_magmom = np.hstack([np.zeros((len(atoms), 2)), dft_magmom[:,np.newaxis]])    
+
+        return start_magmom, dft_magmom
+
     def set_ase(self, data, save_labels=True):
         """Set the contents of this node by saving a list of ASE Atoms objects as an HDF5 file.
 
@@ -240,17 +268,22 @@ class PESData(Data):
         save_data = []
         for atm in data:
             info = atm.info
+            
+            start_magmom, dft_magmom = self.get_ase_magmoms(atm)
+            
             if save_labels and (isinstance(atm.calc, dft_calc) or isinstance(atm.calc, single_calc)):
                 num_labelled_frames += 1
-
+ 
                 save_data.append(
                     {
                         "cell": atm.cell,
                         "symbols": atm.get_chemical_symbols(),
                         "positions": atm.get_positions(),
                         "pbc": atm.pbc,
+                        "start_magmom": start_magmom,
                         "dft_energy": atm.calc.results["energy"],
                         "dft_forces": atm.calc.results["forces"],
+                        "dft_magmom": dft_magmom,
                     }
                 )
                 symb = symb.union(set(save_data[-1]["symbols"]))
@@ -270,6 +303,7 @@ class PESData(Data):
                         "symbols": atm.get_chemical_symbols(),
                         "positions": atm.get_positions(),
                         "pbc": atm.pbc,
+                        "start_magmom": start_magmom,
                     }
                 )
                 symb = symb.union(set(save_data[-1]["symbols"]))
@@ -312,6 +346,8 @@ class PESData(Data):
         for item in data:
             if "dft_forces" in item.keys() and "dft_energy" in item.keys():
                 num_labelled_frames += 1
+                if "dft_magmom" not in item.keys():
+                    item["dft_magmom"] = np.zeros((len(item["dft_forces"]),3))
             else:
                 num_unlabelled_frames += 1
             symb = symb.union(set(item["symbols"]))
@@ -325,12 +361,15 @@ class PESData(Data):
                     UserWarning,
                     stacklevel=2,
                 )
-            if "cell" not in item:
+            if "cell" not in item.keys():
                 raise ValueError("Cell vectors not found in the dataset.")
-            if "symbols" not in item:
+            if "symbols" not in item.keys():
                 raise ValueError("Atomic symbols not found in the dataset.")
-            if "positions" not in item:
+            if "positions" not in item.keys():
                 raise ValueError("Atomic positions not found in the dataset.")
+            if "start_magmom" not in item.keys():
+                item["start_magmom"] = False
+            
             # Ensure that symbols are a list of strings
             item["symbols"] = [str(symbol) for symbol in item["symbols"]]
             save_data.append(
@@ -373,7 +412,7 @@ class PESData(Data):
             cell=config["cell"],
             pbc=config["pbc"],
         )
-
+        
         # Add calculator with DFT data if available
         if "dft_energy" in config and "dft_forces" in config:
             calc_kwargs = {
@@ -384,7 +423,12 @@ class PESData(Data):
                 calc_kwargs["stress"] = convert_stress(config["dft_stress"])
 
             atoms.set_calculator(SinglePointCalculator(atoms, **calc_kwargs))
-
+        
+        # Add magnetic moments
+        if config["start_magmom"]:
+            atoms.arrays["start_magmom"] = config["start_magmom"]        
+        atoms.arrays["dft_magmom"] = config["dft_magmom"]
+        
         return atoms
 
     def get_ase_item(self, index):
@@ -487,12 +531,14 @@ class PESData(Data):
             "symbols",
             "positions",
             "pbc",
+            "start_magmom",
             "forces",
             "stress",
             "energy",
             "dft_forces",
             "dft_stress",
             "dft_energy",
+            "dft_magmom",
             "md_forces",
             "md_stress",
             "md_energy",
@@ -512,7 +558,7 @@ class PESData(Data):
             )
             atm.pbc = config["pbc"]
             atm.info = {}
-
+            
             if write_params:
                 for key in params:
                     atm.info[key] = config[key]
@@ -520,7 +566,7 @@ class PESData(Data):
             if len(atm.get_chemical_symbols()) == 1 and not atm.get_pbc().all():
                 atm.info["config_type"] = "IsolatedAtom"
 
-            if "dft_stress" in config:
+            if "dft_stress" in config.keys():
                 s = convert_stress(config["dft_stress"])
                 atm.info[f"{key_prefix}stress"] = (
                     f"{s[0][0]:.6f} {s[0][1]:.6f} {s[0][2]:.6f} "
@@ -528,12 +574,18 @@ class PESData(Data):
                     f"{s[2][0]:.6f} {s[2][1]:.6f} {s[2][2]:.6f}"
                 )
 
-            if "dft_energy" in config:
+            if "dft_energy" in config.keys():
                 atm.info[f"{key_prefix}energy"] = config["dft_energy"]
-
-            if "dft_forces" in config:
+            
+            if "dft_forces" in config.keys():
                 atm.set_calculator(SinglePointCalculator(atm, forces=config["dft_forces"]))
             print(atm.info.get("stress", None))
+            
+            # Write magnetic moments
+            if config["start_magmom"]:
+                atm.arrays["start_magmom"] = config["start_magmom"]
+            atm.arraya["dft_magmom"] = config["dft_magmom"]
+
             with io.StringIO() as buf, redirect_stdout(buf):
                 write("-", atm, format="extxyz", write_results=True, write_info=True)
                 dataset_txt += buf.getvalue()

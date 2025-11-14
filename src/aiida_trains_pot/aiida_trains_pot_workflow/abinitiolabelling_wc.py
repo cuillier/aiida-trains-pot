@@ -7,6 +7,10 @@ from aiida.plugins import DataFactory, WorkflowFactory
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 from aiida_quantumespresso.data.hubbard_structure import HubbardStructureData
+from aiida_quantumespresso.common.types import SpinType
+from aiida_quantumespresso.calculations.functions.create_magnetic_configuration import create_magnetic_configuration
+
+import numpy as np
 
 PwBaseWorkChain = WorkflowFactory("quantumespresso.pw.base")
 PESData = DataFactory("pesdata")
@@ -33,7 +37,7 @@ def WriteLabelledDataset(non_labelled_structures, **labelled_data):
         labelled_dataset[-1]["dft_forces"] = value["output_trajectory"].get_array("forces")[0].tolist()
         stress = value["output_trajectory"].get_array("stress")[0] * gpa_to_eV_per_ang3
         labelled_dataset[-1]["dft_stress"] = stress.tolist()
-        #labelled_dataset[-1]["dft_magmom"] = value["output_parameters"]
+        labelled_dataset[-1]["dft_magmom"] = value["output_trajectory"].get_array("atomic_magnetic_moments")[0].tolist()
 
     pes_labelled_dataset = PESData(labelled_dataset)
     return pes_labelled_dataset
@@ -61,12 +65,21 @@ class AbInitioLabellingWorkChain(WorkChain):
             required=False,    
             default=lambda: List([]) ) 
         spec.input(
+            "spin_type",
+            valid_type=Str,
+            help="SpinType.NONE, SpinType.COLLINEAR, SpinType.NON_COLLINEAR, SpinType.SPIN_ORBIT",
+            required=False,
+            default=lambda: Str(SpinType.NONE))
+        spec.input(
             "batch_size",
             valid_type=Int,
             help="Number of structures to label in each batch.",
             required=False,
             default=lambda: Int(1000),
         )
+
+        spec.inputs.validator = cls.validate_inputs
+
         spec.expose_inputs(
             PwBaseWorkChain,
             namespace="quantumespresso",
@@ -82,6 +95,12 @@ class AbInitioLabellingWorkChain(WorkChain):
             while_(cls.check_labelled)(cls.run_ab_initio_labelling),
             cls.finalize,
         )
+
+    @classmethod
+    def validate_inputs(cls, inputs, namespace):
+        super().validate_inputs(inputs, namespace)
+        if inputs["spin_type"] not in [SpinType.NONE, SpinType.COLLINEAR]:
+            raise ValidationError("Only SpinType.NONE and SpinType.COLLINEAR are implemented.")
 
     def setup(self):
         """Initialize context and input parameters."""
@@ -124,9 +143,36 @@ class AbInitioLabellingWorkChain(WorkChain):
                 str_data.initialize_onsites_hubbard(**hubbard_kwargs)
             for hubbard_kwargs in self.inputs.intersites_hubbard:
                 str_data.initialize_intersites_hubbard(**hubbard_kwargs)
-
+            
             # Prepare inputs
-            inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace="quantumespresso"))
+            inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace="quantumespresso"))        
+            
+            # Magnetic configuration
+            if self.inputs.spin_type == SpinType.COLLINEAR:
+                if "start_magmom" in structure.arrays.keys():
+                    # Convert from per-atom magnetic moment vectors to
+                    #   per-kind magnetic moment scalars
+                    magnetic_configuration = create_magnetic_configuration(
+                            structure=str_data,
+                            magnetic_moment_per_site=structure.arrays["start_magmom"][:,-1])
+                    magnetic_structure = magnetic_configuration["structure"]
+                    magnetic_moments = magnetic_configuration["magnetic_moments"]
+                else:
+                    # Use builder defaults
+                    magnetic_structure = str_data
+                    magnetic_moments = None
+
+                magnetic_builder = PwBaseWorkChain.get_builder_from_protocol(
+                        code=inputs.pw.code,
+                        structure=magnetic_structure,
+                        spin_type=self.inputs.spin_type,
+                        initial_magnetic_moments=magnetic_moments)
+
+                # Override the structure and magnetization-related keywords
+                str_data = magnetic_builder.pw.structure
+                for keyword in ["starting_magnetization", "nspin"]:
+                    inputs.pw.parameters["SYSTEM"][keyword] = magnetic_builder.pw.parameters["SYSTEM"][keyword]
+          
             inputs.pw.structure = str_data
             inputs.metadata.call_link_label = f"ab_initio_labelling_config_{self.ctx.config}"
 
