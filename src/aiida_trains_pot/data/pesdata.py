@@ -220,29 +220,30 @@ class PESData(Data):
         """
         Read magnetic moments from an ASE Atoms structure. 
 
-        If keys are not found, assume unpolarized calculations. 
-
-        If keys are found but the shape suggests a collinearcalculation, 
+        If keys are found but the shape suggests a collinear calculation, 
         assume the polarization direction is along the z-axis.        
-
-        If starting magnetic moments are not found, pass False to use the
-        PwCalculation builder default behavior.  
 
         :param atoms: ASE Atoms
         :param start_key: Atoms.numbers key containing initial magnetic moments
         :param dft_key: Atoms.numbers key containing final magnetic moments
-        :return start_magmom: (N,3) float ndarray
-        :return dft_magmom: (N,3) float ndarray
+        :return start_magmom: (N,3) float ndarray or None
+        :return dft_magmom: (N,3) float ndarray or None
         """
-        start_magmom = atoms.numbers.get(start_key, False)
-        dft_magmom = atoms.numbers.get(dft_key, np.zeros((len(atoms), 3)))
-        
-        if start_magmom and len(start_magmom.shape) == 1:
-            start_magmom = np.hstack([np.zeros((len(atoms), 2)), start_magmom[:,np.newaxis]])    
-        if len(dft_magmom.shape) == 1:
-            dft_magmom = np.hstack([np.zeros((len(atoms), 2)), dft_magmom[:,np.newaxis]])    
+        magmom_out = []
+        for key in [start_key, dft_key]: 
+            magmom = atoms.arrays.get(key, None)
+            
+            if magmom is not None:
+                magmom = np.array(magmom)   
+                # Reshape arrays in collinear case
+                if len(magmom.shape) == 1:
+                    direction = np.zeros((len(atoms), 3))
+                    direction[:,2] = 1.0    # Assume polarization in z-direction
+                    magmom = direction * magmom[:,np.newaxis]
 
-        return start_magmom, dft_magmom
+            magmom_out.append(magmom)    
+
+        return magmom_out
 
     def set_ase(self, data, save_labels=True):
         """Set the contents of this node by saving a list of ASE Atoms objects as an HDF5 file.
@@ -273,19 +274,26 @@ class PESData(Data):
             
             if save_labels and (isinstance(atm.calc, dft_calc) or isinstance(atm.calc, single_calc)):
                 num_labelled_frames += 1
- 
-                save_data.append(
-                    {
+                
+                data_to_save = { 
                         "cell": atm.cell,
                         "symbols": atm.get_chemical_symbols(),
                         "positions": atm.get_positions(),
                         "pbc": atm.pbc,
-                        "start_magmom": start_magmom,
                         "dft_energy": atm.calc.results["energy"],
                         "dft_forces": atm.calc.results["forces"],
-                        "dft_magmom": dft_magmom,
                     }
-                )
+                if start_magmom is not None:
+                    data_to_save["start_magmom"] = start_magmom
+                if dft_magmom is not None:
+                    data_to_save["dft_magmom"] = dft_magmom
+                else:
+                    # If we don't find magnetic moments in a labelled structure,
+                    #   assume it came from an unpolarized calculation 
+                    data_to_save["dft_magmom"] = np.zeros((len(atoms),3))
+                
+                save_data.append(data_to_save)
+                
                 symb = symb.union(set(save_data[-1]["symbols"]))
                 for key, value in info.items():
                     if "energy" not in key:
@@ -297,15 +305,17 @@ class PESData(Data):
                     continue
             else:
                 num_unlabelled_frames += 1
-                save_data.append(
-                    {
+                data_to_save = {
                         "cell": atm.cell,
                         "symbols": atm.get_chemical_symbols(),
                         "positions": atm.get_positions(),
                         "pbc": atm.pbc,
-                        "start_magmom": start_magmom,
                     }
-                )
+                if start_magmom is not None:
+                    data_to_save["start_magmom"] = start_magmom
+
+                save_data.append(data_to_save)
+                
                 symb = symb.union(set(save_data[-1]["symbols"]))
                 for key, value in info.items():
                     if "energy" not in key:
@@ -344,9 +354,11 @@ class PESData(Data):
         num_unlabelled_frames = 0
         symb = set()
         for item in data:
-            if "dft_forces" in item.keys() and "dft_energy" in item.keys():
+            if "dft_forces" in item and "dft_energy" in item:
                 num_labelled_frames += 1
-                if "dft_magmom" not in item.keys():
+                if "dft_magmom" not in item:
+                    # If we don't find magnetic moments in a labelled structure,
+                    #   assume it came from an unpolarized calculation
                     item["dft_magmom"] = np.zeros((len(item["dft_forces"]),3))
             else:
                 num_unlabelled_frames += 1
@@ -361,14 +373,12 @@ class PESData(Data):
                     UserWarning,
                     stacklevel=2,
                 )
-            if "cell" not in item.keys():
+            if "cell" not in item:
                 raise ValueError("Cell vectors not found in the dataset.")
-            if "symbols" not in item.keys():
+            if "symbols" not in item:
                 raise ValueError("Atomic symbols not found in the dataset.")
-            if "positions" not in item.keys():
+            if "positions" not in item:
                 raise ValueError("Atomic positions not found in the dataset.")
-            if "start_magmom" not in item.keys():
-                item["start_magmom"] = False
             
             # Ensure that symbols are a list of strings
             item["symbols"] = [str(symbol) for symbol in item["symbols"]]
@@ -425,9 +435,10 @@ class PESData(Data):
             atoms.set_calculator(SinglePointCalculator(atoms, **calc_kwargs))
         
         # Add magnetic moments
-        if config["start_magmom"]:
+        if "start_magmom" in config:
             atoms.arrays["start_magmom"] = config["start_magmom"]        
-        atoms.arrays["dft_magmom"] = config["dft_magmom"]
+        if "dft_magmom" in config:
+            atoms.arrays["dft_magmom"] = config["dft_magmom"]
         
         return atoms
 
@@ -574,17 +585,18 @@ class PESData(Data):
                     f"{s[2][0]:.6f} {s[2][1]:.6f} {s[2][2]:.6f}"
                 )
 
-            if "dft_energy" in config.keys():
+            if "dft_energy" in config:
                 atm.info[f"{key_prefix}energy"] = config["dft_energy"]
             
-            if "dft_forces" in config.keys():
+            if "dft_forces" in config:
                 atm.set_calculator(SinglePointCalculator(atm, forces=config["dft_forces"]))
             print(atm.info.get("stress", None))
             
             # Write magnetic moments
-            if config["start_magmom"]:
+            if "start_magmom" in config:
                 atm.arrays["start_magmom"] = config["start_magmom"]
-            atm.arraya["dft_magmom"] = config["dft_magmom"]
+            if "dft_magmom" in config:
+                atm.arrays["dft_magmom"] = config["dft_magmom"]
 
             with io.StringIO() as buf, redirect_stdout(buf):
                 write("-", atm, format="extxyz", write_results=True, write_info=True)

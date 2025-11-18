@@ -2,7 +2,7 @@
 
 from aiida.common import AttributeDict
 from aiida.engine import WorkChain, append_, calcfunction, while_
-from aiida.orm import Dict, Group, Int, Str, List, StructureData, load_group
+from aiida.orm import Dict, Group, Int, Str, List, StructureData, EnumData, load_group
 from aiida.plugins import DataFactory, WorkflowFactory
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
@@ -10,6 +10,7 @@ from aiida_quantumespresso.data.hubbard_structure import HubbardStructureData
 from aiida_quantumespresso.common.types import SpinType
 from aiida_quantumespresso.calculations.functions.create_magnetic_configuration import create_magnetic_configuration
 
+import warnings
 import numpy as np
 
 PwBaseWorkChain = WorkflowFactory("quantumespresso.pw.base")
@@ -44,12 +45,11 @@ def WriteLabelledDataset(non_labelled_structures, **labelled_data):
             magmoms = np.zeros((N_atoms, 3))
         else:
             if value["output_parameters"].dict.number_of_spin_components == 2:  # Collinear
-                magmom
                 # @TODO Use output_parameters.dict.magnetization_angle1/2 (defined per-kind) and
                 # output_trajectory.atomic_species_name to get magnetiziation direction per-atom.
                 magnetization_directions = np.zeros((N_atoms, 3))
                 magnetization_directions[:,2] = 1.0     # Assume polarization along z-axis for now
-                magmoms = magnetization_directions * value["output_trajectory"].get_array("atomic_magnetic_moments")[-1,:,:]
+                magmoms = magnetization_directions * value["output_trajectory"].get_array("atomic_magnetic_moments")[-1,:,np.newaxis]
             elif value["output_parameters"].dict.number_of_spin_components == 4: # Non-collinear
                 magmoms = value["output_trajectory"].get_array("atomic_magnetic_moments")[-1,:,:]
         labelled_dataset[-1]["dft_magmom"] = magmoms.tolist()
@@ -81,10 +81,10 @@ class AbInitioLabellingWorkChain(WorkChain):
             default=lambda: List([]) ) 
         spec.input(
             "spin_type",
-            valid_type=Str,
+            valid_type=EnumData,
             help="SpinType.NONE, SpinType.COLLINEAR, SpinType.NON_COLLINEAR, SpinType.SPIN_ORBIT",
             required=False,
-            default=lambda: Str(SpinType.NONE))
+            default=lambda: SpinType.NONE)
         spec.input(
             "batch_size",
             valid_type=Int,
@@ -113,7 +113,6 @@ class AbInitioLabellingWorkChain(WorkChain):
 
     @classmethod
     def validate_inputs(cls, inputs, namespace):
-        super().validate_inputs(inputs, namespace)
         if inputs["spin_type"] not in [SpinType.NONE, SpinType.COLLINEAR]:
             raise ValidationError("Only SpinType.NONE and SpinType.COLLINEAR are implemented.")
 
@@ -163,41 +162,31 @@ class AbInitioLabellingWorkChain(WorkChain):
             inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace="quantumespresso"))        
             
             # Magnetic configuration
-            if self.inputs.spin_type == SpinType.COLLINEAR:
-                if "start_magmom" in structure.arrays.keys() or "dft_magmom" in structure.arrays.keys():
+            magnetic_moments = None     # Use builder defaults if not specified
+            spin_type = self.inputs.spin_type.get_member()
+            if spin_type == SpinType.COLLINEAR:
+                if "start_magmom" in structure.arrays or "dft_magmom" in structure.arrays:
                     # Default to setting initial magnetic momements from the "start_magmom" key, 
                     #   Otherwise, use the "dft_magmom" key.
-                    # PESData will store "start_magmom" as False if loaded from an ASE Atoms and not provided
-                    if structure.arrays.get("start_magmom", False):
-                        magom_key = "start_magmom"
+                    if "start_magmom" in structure.arrays:
+                        magmom_key = "start_magmom"
                     else:
                         magmom_key = "dft_magmom"
 
                     # Convert from per-atom magnetic moment vectors to
                     #   per-kind magnetic moment scalars
                     # @TODO Handle non-collinear magnetic moments. This currently projects them onto the z-axis.
+                    magmoms = np.array(structure.arrays[magmom_key])[:,-1].tolist()
                     magnetic_configuration = create_magnetic_configuration(
                             structure=str_data,
-                            magnetic_moment_per_site=structure.arrays["start_magmom"][:,-1])
-                    magnetic_structure = magnetic_configuration["structure"]
+                            magnetic_moment_per_site=magmoms)
+                    str_data = magnetic_configuration["structure"]
                     magnetic_moments = magnetic_configuration["magnetic_moments"]
-                else:
-                    # No magmom arrays present, so use PwBaseWorkChain.get_builder_from_protocol defaults
-                    magnetic_structure = str_data
-                    magnetic_moments = None
-
-                magnetic_builder = PwBaseWorkChain.get_builder_from_protocol(
-                        code=inputs.pw.code,
-                        structure=magnetic_structure,
-                        spin_type=self.inputs.spin_type,
-                        initial_magnetic_moments=magnetic_moments)
-
-                # Override the structure and magnetization-related keywords
-                str_data = magnetic_builder.pw.structure
-                for keyword in ["starting_magnetization", "nspin", "angle1", "angle2", "noncolin", "lspinorb"]:
-                    if keyword in magnetic_builder.pw.parameters['SYSTEM']:
-                        inputs.pw.parameters["SYSTEM"][keyword] = magnetic_builder.pw.parameters["SYSTEM"][keyword]
-          
+            elif spin_type == SpinType.NON_COLLINEAR:
+                raise NotImplementedError("SpinType.NON_COLLINEAR not implemented.")
+            elif spin_type == SpinType.SPIN_ORBIT:
+                raise NotImplementedError("SpinType.SPIN_ORBIT not implemented.")           
+ 
             inputs.pw.structure = str_data
             inputs.metadata.call_link_label = f"ab_initio_labelling_config_{self.ctx.config}"
 
@@ -209,10 +198,38 @@ class AbInitioLabellingWorkChain(WorkChain):
                     inputs.pw.pseudos[tp] = pseudos[tp]
                 else:
                     raise ValueError(f"Pseudopotential for {tp} not found")
+            
+            # Override magnetic keywords
+            if spin_type != SpinType.NONE:
+                # Provide pseudos and dummy cutoffs so the builder can normalize the starting 
+                #   magnetization to the valence for backwards compatibility with QE < 7.2
+                overrides = {"pw": {"pseudos": inputs.pw.pseudos,
+                                    "parameters": {
+                                        "SYSTEM": {
+                                            "ecutwfc": 60,
+                                            "ecutrho": 240}
+                                        }
+                                    }
+                                }
+                # Works for both collinear and non-collinear cases, assuming we prepare
+                #   magnetic moments correctly.
+                magnetic_builder = PwBaseWorkChain.get_builder_from_protocol(
+                    code=inputs.pw.code,
+                    structure=str_data,
+                    overrides=overrides,
+                    spin_type=spin_type,
+                    initial_magnetic_moments=magnetic_moments)
+
+                # Only override the magnetic keywords
+                magnetic_inputs = {
+                    "SYSTEM": {k:v for k,v in magnetic_builder.pw.parameters.get_dict()["SYSTEM"].items()
+                               if k in ["starting_magnetization", "nspin", "angle1", "angle2", "noncolin", "lspinorb"]}
+                }
+                inputs.pw.parameters = Dict(recursive_merge(inputs.pw.parameters.get_dict(), magnetic_inputs))                    
 
             default_inputs = {"CONTROL": {"calculation": "scf", "tstress": True, "tprnfor": True}}
             inputs.pw.parameters = Dict(recursive_merge(default_inputs, inputs.pw.parameters.get_dict()))
-
+            
             inputs = prepare_process_inputs(PwBaseWorkChain, inputs)
             # Submit the workchain
             future = self.submit(PwBaseWorkChain, **inputs)
