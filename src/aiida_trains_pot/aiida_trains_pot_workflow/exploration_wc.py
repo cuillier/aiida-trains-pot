@@ -70,7 +70,7 @@ DEFAULT_parameters = Dict(
             "boundary": "p p p",
         },
         "potential": {
-            "potential_style_options": "mace no_domain_decomposition",
+            "potential_style_options": [],
         },
         "control": {
             "timestep": 0.001,
@@ -191,12 +191,12 @@ class ExplorationWorkChain(WorkChain):
                 if self.inputs.protocol == "vdw_d2":
                     if "potential" in self.inputs.parameters:
                         if "potential_style_options" not in self.inputs.parameters["potential"]:
-                            input_parameters["potential"]["potential_style_options"] = (
+                            input_parameters["potential"]["potential_style_options"] = [
                                 "mace no_domain_decomposition momb 20.0 0.75 20.0"
-                            )
+                            ]
                     else:
                         input_parameters["potential"] = {
-                            "potential_style_options": "mace no_domain_decomposition" "momb 20.0 0.75 20.0"
+                            "potential_style_options": ["mace no_domain_decomposition momb 20.0 0.75 20.0"]
                         }
                     if generate_pair_coeff:
                         # Generate DFT-D2 pair coefficients,
