@@ -594,9 +594,9 @@ class PESData(Data):
             
             # Write magnetic moments
             if "start_magmom" in config:
-                atm.arrays["start_magmom"] = config["start_magmom"]
+                atm.arrays["start_magmom"] = np.array(config["start_magmom"])
             if "dft_magmom" in config:
-                atm.arrays["dft_magmom"] = config["dft_magmom"]
+                atm.arrays["dft_magmom"] = np.array(config["dft_magmom"])
 
             with io.StringIO() as buf, redirect_stdout(buf):
                 write("-", atm, format="extxyz", write_results=True, write_info=True)

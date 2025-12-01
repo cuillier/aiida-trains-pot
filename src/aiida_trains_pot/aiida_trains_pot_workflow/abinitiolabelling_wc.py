@@ -84,7 +84,7 @@ class AbInitioLabellingWorkChain(WorkChain):
             valid_type=EnumData,
             help="SpinType.NONE, SpinType.COLLINEAR, SpinType.NON_COLLINEAR, SpinType.SPIN_ORBIT",
             required=False,
-            default=lambda: SpinType.NONE)
+            default=lambda: EnumData(SpinType.NONE))
         spec.input(
             "batch_size",
             valid_type=Int,
@@ -226,6 +226,7 @@ class AbInitioLabellingWorkChain(WorkChain):
                                if k in ["starting_magnetization", "nspin", "angle1", "angle2", "noncolin", "lspinorb"]}
                 }
                 inputs.pw.parameters = Dict(recursive_merge(inputs.pw.parameters.get_dict(), magnetic_inputs))                    
+            # End magnetic override
 
             default_inputs = {"CONTROL": {"calculation": "scf", "tstress": True, "tprnfor": True}}
             inputs.pw.parameters = Dict(recursive_merge(default_inputs, inputs.pw.parameters.get_dict()))

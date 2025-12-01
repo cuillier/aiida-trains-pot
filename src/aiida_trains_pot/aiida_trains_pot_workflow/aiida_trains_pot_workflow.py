@@ -76,6 +76,11 @@ def LammpsFrameExtraction(
 
                         masses, symbols = zip(*sorted(zip(masses, symbols, strict=False)), strict=False)
 
+        # If additional keywords (including the depreciated check_vacuum) are provided, they will be
+        #   included in **trajectories. Only proceed if the node we found is actually a LammpsTrajectory. 
+        if not params:
+            continue
+
         # Convert AiiDA objects to Python types
         thermalization_time_val = (
             thermalization_time.value if hasattr(thermalization_time, "value") else float(thermalization_time)
