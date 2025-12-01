@@ -76,8 +76,8 @@ def LammpsFrameExtraction(
 
                         masses, symbols = zip(*sorted(zip(masses, symbols, strict=False)), strict=False)
 
-        # If additional keywords (including the depreciated check_vacuum) are provided, they will be
-        #   included in **trajectories. Only proceed if the node we found is actually a LammpsTrajectory. 
+        # Anything (including the depreciated check_vacuum keyword) could be in **trajectories, so
+        #   only proceed if we found an actual LammpsTrajectory
         if not params:
             continue
 
