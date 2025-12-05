@@ -410,6 +410,79 @@ def ReplicateStructures(min_dist, max_atoms, vacuum, input_structures):
 
 
 @calcfunction
+def MagneticGenerator(n_configs, fraction_perturbed, selection_threshold, collinear, input_structures):
+    """Randomly perturb and rotate magnetic moments.
+
+    :param n_configs: Int with the number of configurations to generate per input structure
+    :param fraction_perturbed: Float with the fraction of atoms to perturb
+    :param selection_threshold: Float that sets the threshold moment "b" (in Bohr magnetons)
+                                for considering an atom with absolute magnetization "mu" to be magnetic. 
+                                The random selection probability is weighted by
+                                    max(0, mu - b). 
+                                Setting this to a large value (greater than the valence of 
+                                the pseudopotential) yields completely random selection. Setting this 
+                                to some positive finite value will bias the selection toward 
+                                atoms with mu > b.
+    :param input_structures: A PESData dataset with the input structures
+    """
+    structures = []
+    input_structures = input_structures.get_ase_list()i
+
+    for structure in input_structures:
+        num_atoms = len(structure)
+        
+        if "start_magmom" in structure.arrays:
+            input_magmom = structure.arrays["start_magmom"]
+        elif "dft_magmom" in structure.arrays:
+            input_magmom = structure.arrays["dft_magmom"]
+        else:
+            input_magmom = np.zeros((num_atoms, 3))
+
+        absolute_moments = np.linalg.norm(input_magmom, axis=1)
+
+        # Weight random selection probabilities to favor magnetic atoms
+        excess_moments = absolute_moments - selection_threshold
+        selection_weights = np.where(excess_moments > 1e-6, excess_moments, 1e-6)
+        selection_probabilities = selection_weights / np.sum(selection_weights)
+
+        num_rattled = np.ceil(fraction_perturbed * num_atoms).astype(int)
+
+        for _ in range(n_configs):
+            # Perturb the magnitude of the moments
+            perturbed_atoms = np.random.choice(
+                    num_atoms,
+                    size=num_rattled,
+                    replace=False,
+                    p=selection_probabilities)
+            perturbations = np.random.choice(
+                    [-1.0, 1.0],
+                    size=num_rattled,
+                    replace=True)
+
+            # Assign random moment directions
+            directions = np.random.uniform(
+                    low=-1.0, high=1.0,
+                    size=(num_rattled, 3))
+            if collinear:
+                unit_directions = np.where(directions > 0.0, 1.0, -1.0)
+                unit_directions[[0,1],:] = 0.0
+            else:
+                unit_directions = directions / np.linalg.norm(directions, axis=1)
+            
+            # Create a new structure with the augmented starting magnetization
+            new_structure = structure.copy()
+            start_magmom = initial_magmom.copy()
+            
+            start_magmom[perturbed_atoms,:] = (absolute_moments[perturbed_atoms] + perturbations)[:,np.newaxis] \
+                                              * unit_directions
+            new_structure.arrays["start_magmom"] = start_magmom
+            structures.append(ase_to_dict(new_structure))
+            structures[-1]["gen_method"] = "MAGNETIC"
+
+    pes_dataset = PESData(structures)
+    return {"magnetic_structures": pes_dataset}
+
+@calcfunction
 def WriteDataset(**dataset_in):
     """Combine all generated structures into a single PESData dataset."""
     dataset_out = []
