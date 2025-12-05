@@ -410,11 +410,11 @@ def ReplicateStructures(min_dist, max_atoms, vacuum, input_structures):
 
 
 @calcfunction
-def MagneticGenerator(n_configs, fraction_perturbed, selection_threshold, collinear, input_structures):
+def MagneticGenerator(n_configs, frac_perturbed, selection_threshold, collinear, input_structures):
     """Randomly perturb and rotate magnetic moments.
 
     :param n_configs: Int with the number of configurations to generate per input structure
-    :param fraction_perturbed: Float with the fraction of atoms to perturb
+    :param frac_perturbed: Float with the fraction of atoms to perturb
     :param selection_threshold: Float that sets the threshold moment "b" (in Bohr magnetons)
                                 for considering an atom with absolute magnetization "mu" to be magnetic. 
                                 The random selection probability is weighted by
@@ -426,7 +426,7 @@ def MagneticGenerator(n_configs, fraction_perturbed, selection_threshold, collin
     :param input_structures: A PESData dataset with the input structures
     """
     structures = []
-    input_structures = input_structures.get_ase_list()i
+    input_structures = input_structures.get_ase_list()
 
     for structure in input_structures:
         num_atoms = len(structure)
@@ -445,10 +445,10 @@ def MagneticGenerator(n_configs, fraction_perturbed, selection_threshold, collin
         selection_weights = np.where(excess_moments > 1e-6, excess_moments, 1e-6)
         selection_probabilities = selection_weights / np.sum(selection_weights)
 
-        num_rattled = np.ceil(fraction_perturbed * num_atoms).astype(int)
+        num_rattled = np.ceil(frac_perturbed * num_atoms).astype(int)
 
         for _ in range(n_configs):
-            # Perturb the magnitude of the moments
+            # Perturb the magnitude of the moments by +-1 Bohr magneton
             perturbed_atoms = np.random.choice(
                     num_atoms,
                     size=num_rattled,
@@ -589,6 +589,10 @@ class DatasetAugmentationWorkChain(WorkChain):
     DEFAULT_vacuum = Float(15.0)
     DEFAULT_max_substitution_fraction = Float(0.2)
     DEFAULT_substitution_fraction = Float(0.2)
+    DEFAULT_magnetic_n_configs = Int(50)
+    DEFAULT_magnetic_frac_perturbed = Float(0.5)
+    DEFAULT_magnetic_selection_threshold = Float(100.0)
+    DEFAULT_magnetic_collinear = Bool(True)
 
     DEFAULT_do_rattle_strain_defects = Bool(True)
     DEFAULT_do_input = Bool(True)
@@ -598,6 +602,7 @@ class DatasetAugmentationWorkChain(WorkChain):
     DEFAULT_do_replicate = Bool(True)
     DEFAULT_do_check_vacuum = Bool(True)
     DEFAULT_do_substitution = Bool(True)
+    DEFAULT_do_magnetic = Bool(False)
     ######################################################
 
     @classmethod
@@ -670,6 +675,13 @@ class DatasetAugmentationWorkChain(WorkChain):
             default=lambda: cls.DEFAULT_do_substitution,
             required=False,
             help=f"Add substituted structures to the dataset. Default: {cls.DEFAULT_do_substitution}",
+        )
+        spec.input(
+            "do_magnetic",
+            valid_type=Bool,
+            default=lambda: cls.DEFAULT_do_magnetic,
+            required=False,
+            help=f"Add structures with perturbed starting magnetizations. Default: {cls.DEFAULT_do_magnetic}",
         )
 
         spec.input(
@@ -796,6 +808,41 @@ class DatasetAugmentationWorkChain(WorkChain):
         )
 
         spec.input(
+            "magnetic.n_configs",
+            valid_type=(Int),
+            default=lambda: cls.DEFAULT_magnetic_n_configs,
+            required=False,
+            help="Number of magnetic configurations to generate per each input structure. "
+            f"Default: {cls.DEFAULT_magnetic_n_configs}",
+        )
+        spec.input(
+            "magnetic.frac_perturbed",
+            valid_type=(Int, Float),
+            default=lambda: cls.DEFAULT_magnetic_frac_perturbed,
+            required=False,
+            help="Fraction of atoms to have their starting magnetic moments perturbed. "
+            f"Default: {cls.DEFAULT_magnetic_frac_perturbed}",
+        )
+        spec.input(
+            "magnetic.selection_threshold",
+            valid_type=(Int, Float),
+            default=lambda: cls.DEFAULT_magnetic_selection_threshold,
+            required=False,
+            help="Atoms with magnetic moments above this threshold (in Bohr magnetons) have"
+            " a higher probability of being selected for perturbation. Values greater than"
+            " the Z-valence of the pseudopotential yield completely random selection. "
+            f"Default: {cls.DEFAULT_magnetic_selection_threshold}",
+        )
+        spec.input(
+            "magnetic.collinear",
+            valid_type=(Bool),
+            default=lambda: cls.DEFAULT_magnetic_collinear,
+            required=False,
+            help="Whether to only generate collinear magnetic moments aligned along the z-axis. "
+            f"Default: {cls.DEFAULT_magnetic_collinear}",
+        )
+
+        spec.input(
             "vacuum",
             valid_type=(Int, Float),
             default=lambda: cls.DEFAULT_vacuum,
@@ -842,6 +889,13 @@ class DatasetAugmentationWorkChain(WorkChain):
             self.ctx.vacuum = self.inputs.vacuum
         else:
             self.ctx.vacuum = Float(0)
+
+        if self.inputs.do_magnetic:
+            if self.inputs.magnetic.n_configs < 1:
+                raise ValueError("magnetic.n_configs must be at least 1")
+            if self.inputs.magnetic.frac_perturbed < 0.0 or self.inputs.magnetic.frac_perturbed > 1.0:
+                raise ValueError("magnetic.frac_perturbed must be between 0 and 1")
+
 
     def do_replication(self):  # noqa: D102
         return bool(self.inputs.do_replication)
@@ -907,5 +961,13 @@ class DatasetAugmentationWorkChain(WorkChain):
                 self.inputs.substitution.structures_fraction,
                 **datasets_to_substitute,
             )["substituted_structures"]
+        if self.inputs.do_magnetic:
+            dataset["magnetic"] = MagneticGenerator(
+                self.inputs.magnetic.n_configs,
+                self.inputs.magnetic.frac_perturbed,
+                self.inputs.magnetic.selection_threshold,
+                self.inputs.magnetic.collinear,
+                input_structures=self.ctx.initial_dataseti
+            )["magnetic_structures"]    
         dataset["global_structures"] = WriteDataset(**dataset)["global_structures"]
         self.out("structures", dataset)
