@@ -149,15 +149,7 @@ class AbInitioLabellingWorkChain(WorkChain):
         ]:
             self.ctx.config += 1
             str_data = StructureData(ase=structure)            
-
-            # Hubbard parameters
-            if self.inputs.onsites_hubbard or self.inputs.intersites_hubbard:
-                str_data = HubbardStructureData.from_structure(str_data) 
-            for hubbard_kwargs in self.inputs.onsites_hubbard:
-                str_data.initialize_onsites_hubbard(**hubbard_kwargs)
-            for hubbard_kwargs in self.inputs.intersites_hubbard:
-                str_data.initialize_intersites_hubbard(**hubbard_kwargs)
-            
+          
             # Prepare inputs
             inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace="quantumespresso"))        
             
@@ -187,6 +179,21 @@ class AbInitioLabellingWorkChain(WorkChain):
             elif spin_type == SpinType.SPIN_ORBIT:
                 raise NotImplementedError("SpinType.SPIN_ORBIT not implemented.")           
  
+            # Hubbard parameters
+            if self.inputs.onsites_hubbard or self.inputs.intersites_hubbard:
+                str_data = HubbardStructureData.from_structure(str_data) 
+                # Set onsite Hubbard parameters
+                for hubbard_kwargs in self.inputs.onsites_hubbard:
+                    # If the calculation is spin-polarized, force use_kinds = False
+                    if spin_type != SpinType.NONE:
+                        hubbard_kwargs["use_kinds"] = False
+                    str_data.initialize_onsites_hubbard(**hubbard_kwargs)
+                # Set intersite Hubbard parameters
+                for hubbard_kwargs in self.inputs.intersites_hubbard:
+                    if spin_type != SpinType.NONE:
+                        hubbard_kwargs["use_kinds"] = False
+                    str_data.initialize_intersites_hubbard(**hubbard_kwargs)
+            
             inputs.pw.structure = str_data
             inputs.metadata.call_link_label = f"ab_initio_labelling_config_{self.ctx.config}"
 

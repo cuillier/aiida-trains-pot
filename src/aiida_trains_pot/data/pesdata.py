@@ -290,7 +290,7 @@ class PESData(Data):
                 else:
                     # If we don't find magnetic moments in a labelled structure,
                     #   assume it came from an unpolarized calculation 
-                    data_to_save["dft_magmom"] = np.zeros((len(atoms),3))
+                    data_to_save["dft_magmom"] = np.zeros((len(atm),3))
                 
                 save_data.append(data_to_save)
                 
