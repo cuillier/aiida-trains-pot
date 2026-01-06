@@ -1,6 +1,7 @@
 """AiiDA WorkChain for active learning of interatomic potentials using LAMMPS and MACE."""
 
 import random
+import re
 
 from aiida import load_profile
 from aiida.common import AttributeDict
@@ -139,17 +140,27 @@ def SelectToLabel(evaluated_dataset, thr_energy, thr_forces, thr_stress, max_fra
         forces_deviation.append(config["forces_deviation"])
         stress_deviation.append(config["stress_deviation"])
         if (
-            config["energy_deviation"] > thr_energy
+               config["energy_deviation"] > thr_energy
             or config["forces_deviation"] > thr_forces
             or config["stress_deviation"] > thr_stress
         ):
             selected_dataset.append(config)
             if max_frames:
                 loss.append(
-                    config["energy_deviation"] / thr_energy
+                      config["energy_deviation"] / thr_energy
                     + config["forces_deviation"] / thr_forces
                     + config["stress_deviation"] / thr_stress
                 )
+            # Assign initial magnetic moments if the structure came
+            #   from a MagneticMACE committee
+            magmom_keys = [match.string for match in \
+                           [re.search(r"pot_\d+_magmom", key) for key in config.keys()] \
+                           if match is not None]
+            if magmom_keys:
+                # Randomly select which set of initial magnetic moments to use
+                magmom_source = random.sample(magmom_keys, 1)
+                selected_dataset[-1]["start_magmom"] = config[magmom_source]
+
     if max_frames:
         if len(selected_dataset) > max_frames:
             random.shuffle(selected_dataset)
@@ -192,6 +203,8 @@ class TrainsPotWorkChain(WorkChain):
         DEFAULT_do_ab_initio_labelling = Bool(True)
         DEFAULT_do_training = Bool(True)
         DEFAULT_do_exploration = Bool(True)
+    
+        DEFAULT_bypass_exploration = Bool(False)
 
         DEFAULT_check_vacuum = Bool(True)
         ######################################################
@@ -230,6 +243,14 @@ class TrainsPotWorkChain(WorkChain):
             valid_type=Int,
             default=lambda: DEFAULT_max_loops,
             help="Maximum number of active learning workflow loops",
+            required=False,
+        )
+
+        spec.input(
+            "bypass_exploration",
+            valid_type=Bool,
+            default=lambda: DEFAULT_bypass_exploration,
+            help="Skip the LAMMPS exploration step on every iteration.",
             required=False,
         )
 
@@ -707,32 +728,40 @@ class TrainsPotWorkChain(WorkChain):
             selected.append(x)
 
         self.ctx.lammps_input_structures = PESData([self.ctx.lammps_input_structures.get_item(key) for key in selected])
+        
+        if self.inputs.bypass_exploration:
+            self.report("Skipped ExplorationWorkChain")
+        else:
+            inputs.lammps_input_structures = self.ctx.lammps_input_structures
+            inputs.sampling_time = self.inputs.frame_extraction.sampling_time
 
-        inputs.lammps_input_structures = self.ctx.lammps_input_structures
-        inputs.sampling_time = self.inputs.frame_extraction.sampling_time
+            future = self.submit(ExplorationWorkChain, **inputs)
 
-        future = self.submit(ExplorationWorkChain, **inputs)
-
-        self.report(f"Launched ExplorationWorkChain with dataset_list <{future.pk}>")
-        self.to_context(exploration=future)
+            self.report(f"Launched ExplorationWorkChain with dataset_list <{future.pk}>")
+            self.to_context(exploration=future)
 
     def exploration_frame_extraction(self):
         """Run exploration frame extraction."""
         # for _, trajectory in self.ctx.trajectories.items():
-        parameters = AttributeDict(self.inputs.exploration.parameters)
-        dump_rate = int(self.inputs.frame_extraction.sampling_time / parameters.control.timestep)
-        explored_dataset = LammpsFrameExtraction(
-            self.inputs.frame_extraction.sampling_time,
-            dump_rate,
-            thermalization_time=self.inputs.frame_extraction.thermalization_time,
-            check_vacuum=self.inputs.check_vacuum,
-            min_vacuum=self.inputs.vacuum.min_vacuum,
-            target_vacuum=self.inputs.vacuum.target_vacuum,
-            **self.ctx.trajectories,
-        )["explored_dataset"]
+        if self.inputs.bypass_exploration:
+            explored_dataset = self.ctx.trajectories.values()
+        else:
+            parameters = AttributeDict(self.inputs.exploration.parameters)
+            dump_rate = int(self.inputs.frame_extraction.sampling_time / parameters.control.timestep)
+            explored_dataset = LammpsFrameExtraction(
+                self.inputs.frame_extraction.sampling_time,
+                dump_rate,
+                thermalization_time=self.inputs.frame_extraction.thermalization_time,
+                check_vacuum=self.inputs.check_vacuum,
+                min_vacuum=self.inputs.vacuum.min_vacuum,
+                target_vacuum=self.inputs.vacuum.target_vacuum,
+                **self.ctx.trajectories,
+            )["explored_dataset"]
+        
         if len(explored_dataset) == 0:
             self.finalize()
             return self.exit_codes.EMPTY_EXPLORATION_DATASET
+        
         self.ctx.explored_dataset = explored_dataset
 
     def run_committee_evaluation(self):
@@ -785,14 +814,22 @@ class TrainsPotWorkChain(WorkChain):
 
     def finalize_exploration(self):
         """Finalize exploration and collect trajectories."""
-        if len(self.ctx.exploration.outputs.md) < 1:
-            return self.exit_codes.NO_MD_CALCULATIONS
+        if self.inputs.bypass_exploration:
+            if len(self.ctx.lammps_input_structures) < 1:
+                return self.exit_codes.NO_MD_CALCULATIONS
+            
+            self.ctx.trajectories = {f"exploration_{ii}": value \
+                for ii,value in enumerate(self.ctx.lammps_input_structures)}
+        else:
+            if len(self.ctx.exploration.outputs.md) < 1:
+                return self.exit_codes.NO_MD_CALCULATIONS
 
-        self.ctx.trajectories = {}
-        for ii, calc in enumerate(self.ctx.exploration.outputs.md.values()):
-            for key, value in calc.items():
-                if key == "trajectories":
-                    self.ctx.trajectories[f"exploration_{ii}"] = value
+            self.ctx.trajectories = {}
+            for ii, calc in enumerate(self.ctx.exploration.outputs.md.values()):
+                for key, value in calc.items():
+                    if key == "trajectories":
+                        self.ctx.trajectories[f"exploration_{ii}"] = value
+        
         self.ctx.exploration = []
 
     def finalize_committee_evaluation(self):
