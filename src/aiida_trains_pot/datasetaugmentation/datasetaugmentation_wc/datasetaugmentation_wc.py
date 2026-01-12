@@ -14,6 +14,10 @@ from aiida.orm import Bool, Float, Int, List
 from aiida.plugins import DataFactory
 from ase import Atoms
 from ase.build import surface
+import numpy as np
+import random
+import math
+import time
 
 load_profile()
 
@@ -406,8 +410,24 @@ def ReplicateStructures(min_dist, max_atoms, vacuum, input_structures):
         structures.append(ase_to_dict(replicated_structure))
 
     pes_dataset = PESData(structures)
-    return {"replicated_structures": pes_dataset}
+    return {'replicated_structures': pes_dataset}
 
+@calcfunction
+def AlloysGenerator(fixed_species, alloy_species, num_structures, alloy_fractions=None, **input_datasets):
+    
+    alloys = []
+    input_structures = []
+    for _, input_dataset in input_datasets.items():
+        input_structures += input_dataset.get_ase_list()
+    rng = np.random.default_rng(int(time.time()))
+    input_structures = [input_structures[0]]
+    while len(alloys) < num_structures:
+        sel = input_structures[rng.integers(len(input_structures))]
+        alloy = random_substitute_atoms(sel, fixed_species, alloy_species, alloy_fractions)
+        alloys.append(ase_to_dict(alloy))
+        alloys[-1]['gen_method'] = 'ALLOY'
+    pes_dataset = PESData(alloys)
+    return {'substituted_structures': pes_dataset}
 
 @calcfunction
 def WriteDataset(**dataset_in):
@@ -468,6 +488,66 @@ def uniform_random_atomic_displacement(positions, min_distances, max_displacemen
         positions[ii] += uniform(0, 1) * min_distances[ii] * max_displacement_fraction * rand_dir
     return positions
 
+def random_substitute_atoms(
+    atoms: Atoms,
+    fixed_species=None,
+    substitute_species=None,
+    fractions=None,
+) -> Atoms:
+    """
+    Sostitutes randomly the species of the input `atoms`, keeping fixed those in `fixed_species`.
+    """
+    if substitute_species is None or len(substitute_species) == 0:
+        return None
+
+    rng = np.random.default_rng(int(time.time()))
+    fixed_species = list(fixed_species) if fixed_species else []
+
+    syms = atoms.get_chemical_symbols()
+    replace_idx = [i for i, s in enumerate(syms) if s not in fixed_species]
+    R = len(replace_idx)
+    if R == 0:
+        return atoms.copy()
+
+    subs = list(substitute_species)
+    k = len(subs)
+
+    if fractions is None:
+        # Random fractions
+        p = rng.dirichlet(np.ones(k))
+    elif isinstance(fractions, dict):
+        p = np.array([float(fractions.get(sp, 0.0)) for sp in subs], dtype=float)
+        p /= p.sum()
+    else:
+        p = np.array(fractions, dtype=float)
+        if p.shape[0] != k:
+            return None
+        p /= p.sum()
+
+    raw = p * R
+    counts = np.floor(raw).astype(int)
+    rem = R - counts.sum()
+    if rem > 0:
+        order = np.argsort(-(raw - counts)) # descending fractional parts
+        for t in range(rem):
+            counts[order[t % k]] += 1
+
+    # pool e shuffle
+    pool = [sp for sp, c in zip(subs, counts) for _ in range(int(c))]
+    if len(pool) < R:
+        pool += [subs[0]] * (R - len(pool))
+    elif len(pool) > R:
+        pool = pool[:R]
+    rng.shuffle(pool)
+
+    # apply
+    new_syms = syms[:]
+    for idx, sp in zip(replace_idx, pool):
+        new_syms[idx] = sp
+
+    out = atoms.copy()
+    out.set_chemical_symbols(new_syms)
+    return out
 
 def atoms_substitution(structure, fraction_substitution):
     """Substitute atoms in the structure with random atoms from the same structure.
@@ -496,36 +576,41 @@ def atoms_substitution(structure, fraction_substitution):
 class DatasetAugmentationWorkChain(WorkChain):
     """WorkChain to generate a training dataset."""
 
-    ######################################################
-    ##                 DEFAULT VALUES                   ##
-    ######################################################
-    DEFAULT_RSD_rattle_fraction = Float(0.3)
-    DEFAULT_RSD_max_compressive_strain = Float(0.2)
-    DEFAULT_RSD_max_tensile_strain = Float(0.6)
-    DEFAULT_RSD_n_configs = Int(50)
-    DEFAULT_RSD_frac_vacancies = Float(0.3)
-    DEFAULT_RSD_vacancies_per_config = Int(2)
-    DEFAULT_clusters_n_clusters = Int(20)
-    DEFAULT_clusters_max_atoms = Int(10)
-    DEFAULT_clusters_interatomic_distance = Float(1.5)
-    DEFAULT_slabs_miller_indices = List([[1, 1, 1], [1, 1, 0], [1, 0, 0]])
-    DEFAULT_slabs_min_thickness = Float(10.0)
-    DEFAULT_slabs_max_atoms = Int(450)
-    DEFAULT_replicate_min_dist = Float(18.0)
-    DEFAULT_replicate_max_atoms = Int(450)
-    DEFAULT_vacuum = Float(15.0)
-    DEFAULT_max_substitution_fraction = Float(0.2)
-    DEFAULT_substitution_fraction = Float(0.2)
 
-    DEFAULT_do_rattle_strain_defects = Bool(True)
-    DEFAULT_do_input = Bool(True)
-    DEFAULT_do_isolated = Bool(True)
-    DEFAULT_do_clusters = Bool(True)
-    DEFAULT_do_slabs = Bool(True)
-    DEFAULT_do_replicate = Bool(True)
-    DEFAULT_do_check_vacuum = Bool(True)
-    DEFAULT_do_substitution = Bool(True)
-    ######################################################
+   ######################################################
+   ##                 DEFAULT VALUES                   ##
+   ######################################################
+    DEFAULT_RSD_rattle_fraction             = Float(0.3)
+    DEFAULT_RSD_max_compressive_strain      = Float(0.2)
+    DEFAULT_RSD_max_tensile_strain          = Float(0.6)
+    DEFAULT_RSD_n_configs                   = Int(50)
+    DEFAULT_RSD_frac_vacancies              = Float(0.3)
+    DEFAULT_RSD_vacancies_per_config        = Int(2)
+    DEFAULT_clusters_n_clusters             = Int(20)
+    DEFAULT_clusters_max_atoms              = Int(10)
+    DEFAULT_clusters_interatomic_distance   = Float(1.5)
+    DEFAULT_slabs_miller_indices            = List([[1,1,1],[1,1,0],[1,0,0]])
+    DEFAULT_slabs_min_thickness             = Float(10.0)
+    DEFAULT_slabs_max_atoms                 = Int(450)
+    DEFAULT_replicate_min_dist              = Float(18.0)
+    DEFAULT_replicate_max_atoms             = Int(450)
+    DEFAULT_vacuum                          = Float(15.0)
+    DEFAULT_max_substitution_fraction       = Float(0.2)
+    DEFAULT_substitution_fraction           = Float(0.2)
+    DEFAULT_alloys_num_structures           = Int(100)
+
+    DEFAULT_do_rattle_strain_defects        = Bool(True)
+    DEFAULT_do_input                        = Bool(True)
+    DEFAULT_do_isolated                     = Bool(True)
+    DEFAULT_do_clusters                     = Bool(True)
+    DEFAULT_do_slabs                        = Bool(True)
+    DEFAULT_do_replicate                    = Bool(True)
+    DEFAULT_do_check_vacuum                 = Bool(True)
+    DEFAULT_do_substitution                 = Bool(True)
+    DEFAULT_do_alloys                       = Bool(True)
+   ######################################################
+
+
 
     @classmethod
     def define(cls, spec):
@@ -538,66 +623,15 @@ class DatasetAugmentationWorkChain(WorkChain):
             help="PESData, dataset containing input structures.",
         )
 
-        spec.input(
-            "do_rattle_strain_defects",
-            valid_type=Bool,
-            default=lambda: cls.DEFAULT_do_rattle_strain_defects,
-            required=False,
-            help="Perform rattle calculations (random atomic displacements, cell stretch/compression, "
-            "vacancies. Permutations and replacements are not yet implemented). "
-            f"Default: {cls.DEFAULT_do_rattle_strain_defects}",
-        )
-        spec.input(
-            "do_input",
-            valid_type=Bool,
-            default=lambda: cls.DEFAULT_do_input,
-            required=False,
-            help=f"Add input structures to the dataset. Default: {cls.DEFAULT_do_input}",
-        )
-        spec.input(
-            "do_isolated",
-            valid_type=Bool,
-            default=lambda: cls.DEFAULT_do_isolated,
-            required=False,
-            help="Add isolated atoms configurations to the dataset. " f"Default: {cls.DEFAULT_do_isolated}",
-        )
-        spec.input(
-            "do_clusters",
-            valid_type=Bool,
-            default=lambda: cls.DEFAULT_do_clusters,
-            required=False,
-            help=f"Add clusters to the dataset. Default: {cls.DEFAULT_do_clusters}",
-        )
-        spec.input(
-            "do_slabs",
-            valid_type=Bool,
-            default=lambda: cls.DEFAULT_do_slabs,
-            required=False,
-            help=f"Add slabs to the dataset. Default: {cls.DEFAULT_do_slabs}",
-        )
-        spec.input(
-            "do_check_vacuum",
-            valid_type=Bool,
-            default=lambda: cls.DEFAULT_do_check_vacuum,
-            required=False,
-            help="Check if vacuum along non periodic directions is enough and add it if necessary. "
-            f"Default: {cls.DEFAULT_do_check_vacuum}",
-        )
-        spec.input(
-            "do_replication",
-            valid_type=Bool,
-            default=lambda: cls.DEFAULT_do_replicate,
-            required=False,
-            help="Replicate structures to have a minimum distance between atoms greater than min_dist. "
-            f"Default: {cls.DEFAULT_do_replicate}",
-        )
-        spec.input(
-            "do_substitution",
-            valid_type=Bool,
-            default=lambda: cls.DEFAULT_do_substitution,
-            required=False,
-            help=f"Add substituted structures to the dataset. Default: {cls.DEFAULT_do_substitution}",
-        )
+        spec.input("do_rattle_strain_defects", valid_type=Bool, default=lambda:cls.DEFAULT_do_rattle_strain_defects, required=False, help=f"Perform rattle calculations (random atomic displacements, cell stretch/compression, vacancies. Permutations and replacements are not yet implemented). Default: {cls.DEFAULT_do_rattle_strain_defects}")
+        spec.input("do_input", valid_type=Bool, default=lambda:cls.DEFAULT_do_input, required=False, help=f"Add input structures to the dataset. Default: {cls.DEFAULT_do_input}")
+        spec.input("do_isolated", valid_type=Bool, default=lambda:cls.DEFAULT_do_isolated, required=False, help=f"Add isolated atoms configurations to the dataset. Default: {cls.DEFAULT_do_isolated}")
+        spec.input("do_clusters", valid_type=Bool, default=lambda:cls.DEFAULT_do_clusters, required=False, help=f"Add clusters to the dataset. Default: {cls.DEFAULT_do_clusters}")
+        spec.input("do_slabs", valid_type=Bool, default=lambda:cls.DEFAULT_do_slabs, required=False, help=f"Add slabs to the dataset. Default: {cls.DEFAULT_do_slabs}")
+        spec.input("do_check_vacuum", valid_type=Bool, default=lambda:cls.DEFAULT_do_check_vacuum, required=False, help=f"Check if vacuum along non periodic directions is enough and add it if necessary. Default: {cls.DEFAULT_do_check_vacuum}")
+        spec.input("do_replication", valid_type=Bool, default=lambda:cls.DEFAULT_do_replicate, required=False, help=f"Replicate structures to have a minimum distance between atoms greater than min_dist. Default: {cls.DEFAULT_do_replicate}")
+        spec.input("do_substitution", valid_type=Bool, default=lambda:cls.DEFAULT_do_substitution, required=False, help=f"Add substituted structures to the dataset. Default: {cls.DEFAULT_do_substitution}")
+        spec.input("do_alloys", valid_type=Bool, default=lambda:cls.DEFAULT_do_alloys, required=False, help=f"Add alloy structures to the dataset. Default: {cls.DEFAULT_do_alloys}")
 
         spec.input(
             "rsd.params.rattle_fraction",
@@ -721,20 +755,29 @@ class DatasetAugmentationWorkChain(WorkChain):
             required=False,
             help=f"Fraction of structures to be substituted. Default: {cls.DEFAULT_max_substitution_fraction}",
         )
+        spec.input("replicate.min_dist", valid_type=(Int,Float), default=lambda:cls.DEFAULT_replicate_min_dist, required=False, help=f"Minimum distance between atoms in PBC replicas, unless max_atoms is reached. Default: {cls.DEFAULT_replicate_min_dist}")
+        spec.input("replicate.max_atoms", valid_type=Int, default=lambda:cls.DEFAULT_replicate_max_atoms, required=False, help=f"Maximum number of atoms in the supercell. Stronger criteria respect to min_dist. Default: {cls.DEFAULT_replicate_max_atoms}")
+        
+        spec.input("substitution.switches_fraction", valid_type=(Int,Float), default=lambda:cls.DEFAULT_substitution_fraction, required=False, help=f"Fraction of atoms to be substituted. Default: {cls.DEFAULT_substitution_fraction}")
+        spec.input("substitution.structures_fraction", valid_type=(Int,Float), default=lambda:cls.DEFAULT_max_substitution_fraction, required=False, help=f"Fraction of structures to be substituted. Default: {cls.DEFAULT_max_substitution_fraction}")
 
-        spec.input(
-            "vacuum",
-            valid_type=(Int, Float),
-            default=lambda: cls.DEFAULT_vacuum,
-            required=False,
-            help=f"Minimum vacuum along non periodic directions. Default: {cls.DEFAULT_vacuum}",
-        )
+        spec.input("alloys.fixed_species", valid_type=List, required=False, help="List of species that will not be substituted in the alloy generation.")
+        spec.input("alloys.alloy_species", valid_type=List, required=False, help="List of species to be used for alloy generation.")
+        spec.input("alloys.num_structures", valid_type=Int, default=lambda:cls.DEFAULT_alloys_num_structures, required=False, help=f"Number of alloy structures to generate. Default: {cls.DEFAULT_alloys_num_structures}")
+        spec.input("alloys.fractions", valid_type=List, required=False, help=f"List of fractions for each alloy species. If not provided, random fractions will be used.")
+
+        spec.input("vacuum", valid_type=(Int,Float), default=lambda:cls.DEFAULT_vacuum, required=False, help=f"Minimum vacuum along non periodic directions. Default: {cls.DEFAULT_vacuum}")
+
         spec.output_namespace("structures", valid_type=PESData, dynamic=True, help="Augmented datasets.")
 
+        spec.inputs.validator = cls.validate_inputs
+
         spec.outline(
-            cls.check_inputs,
-            if_(cls.do_replication)(cls.replicate),
-            cls.run_dataset_generation,
+            cls.setup,
+            if_(cls.do_replication)(
+                cls.replicate),
+            cls.run_dataset_generation
+            
         )
 
     @classmethod
@@ -744,34 +787,47 @@ class DatasetAugmentationWorkChain(WorkChain):
         builder.structures = {f"s{ii}": s for ii, s in enumerate(structures)}
         return builder
 
-    def check_inputs(self):
+    @classmethod
+    def validate_inputs(cls, inputs, port_namespace):
         """Check inputs."""
-        if self.inputs.do_rattle_strain_defects:
-            # ERRORS
-            if self.inputs.rsd.params.rattle_fraction < 0.0 or self.inputs.rsd.params.rattle_fraction > 1.0:
-                raise ValueError("rattle_fraction must be between 0 and 1")
-            if self.inputs.rsd.params.max_tensile_strain < 0.0:
-                raise ValueError("max_tensile_strain must be greater than 0")
-            if (
-                self.inputs.rsd.params.max_compressive_strain < 0.0
-                or self.inputs.rsd.params.max_compressive_strain > 1.0
-            ):
-                raise ValueError("max_compressive_strain must be between 0 and 1")
-            if self.inputs.rsd.params.n_configs < 1:
-                raise ValueError("n_configs must be at least 1")
-            if self.inputs.rsd.params.frac_vacancies < 0.0 or self.inputs.rsd.params.frac_vacancies > 1.0:
-                raise ValueError("frac_vacancies must be between 0 and 1")
-            if self.inputs.rsd.params.vacancies_per_config < 0:
-                raise ValueError("vacancies_per_config must be non-negative")
 
+        if inputs['do_rattle_strain_defects']:
+            # ERRORS
+            if inputs['rsd']['params']['rattle_fraction'] < 0.0 or inputs['rsd']['params']['rattle_fraction'] > 1.0:
+                return 'rattle_fraction must be between 0 and 1'
+            if inputs['rsd']['params']['max_tensile_strain'] < 0.0:
+                return 'max_tensile_strain must be greater than 0'
+            if inputs['rsd']['params']['max_compressive_strain'] < 0.0 or inputs['rsd']['params']['max_compressive_strain'] > 1.0:
+                return 'max_compressive_strain must be between 0 and 1'
+            if inputs['rsd']['params']['n_configs'] < 1:
+                return 'n_configs must be at least 1'
+            if inputs['rsd']['params']['frac_vacancies'] < 0.0 or inputs['rsd']['params']['frac_vacancies'] > 1.0:
+                return 'frac_vacancies must be between 0 and 1'
+            if inputs['rsd']['params']['vacancies_per_config'] < 0:
+                return 'vacancies_per_config must be non-negative'
+            if inputs['do_alloys']:
+                if 'alloy_species' not in inputs['alloys'] or len(inputs['alloys']['alloy_species']) == 0:
+                    return 'alloy_species must be specified when do_alloys is True'
+                if inputs['alloys']['num_structures'] < 1:
+                    return 'num_structures must be at least 1'
+
+
+    def setup(self):
+        """Setup workchain."""
         self.ctx.initial_dataset = self.inputs.structures
         if self.inputs.do_check_vacuum:
             self.ctx.vacuum = self.inputs.vacuum
         else:
             self.ctx.vacuum = Float(0)
+        if self.inputs.do_alloys:
+            self.ctx.alloys_fractions = []
+            if 'fractions' in self.inputs.alloys:
+                self.ctx.alloys_fractions = self.inputs.alloys.fractions
+            self.ctx.alloys_fixed_species = []
+            if 'fixed_species' in self.inputs.alloys:
+                self.ctx.alloys_fixed_species = self.inputs.alloys.fixed_species
 
-    def do_replication(self):  # noqa: D102
-        return bool(self.inputs.do_replication)
+    def do_replication(self): return bool(self.inputs.do_replication)
 
     def replicate(self):
         """Replicate structures."""
@@ -828,11 +884,22 @@ class DatasetAugmentationWorkChain(WorkChain):
             if self.inputs.do_rattle_strain_defects:
                 datasets_to_substitute["rattle_strain_defects_structures"] = dataset["rattle_strain_defects_structures"]
             if self.inputs.do_slabs:
-                datasets_to_substitute["slabs"] = dataset["slabs"]
-            dataset["substituted"] = SubstitutionGenerator(
-                self.inputs.substitution.switches_fraction,
-                self.inputs.substitution.structures_fraction,
-                **datasets_to_substitute,
-            )["substituted_structures"]
-        dataset["global_structures"] = WriteDataset(**dataset)["global_structures"]
+                datasets_to_substitute['slabs'] = dataset['slabs']
+            dataset['substituted'] = SubstitutionGenerator( self.inputs.substitution.switches_fraction,
+                                                            self.inputs.substitution.structures_fraction,
+                                                            **datasets_to_substitute,)['substituted_structures']
+        if self.inputs.do_alloys:
+            datasets_for_alloys = {}
+            if self.inputs.do_input:
+                datasets_for_alloys['input_structures'] = dataset['input_structures']
+            if self.inputs.do_rattle_strain_defects:
+                datasets_for_alloys['rattle_strain_defects_structures'] = dataset['rattle_strain_defects_structures']
+            if self.inputs.do_slabs:
+                datasets_for_alloys['slabs'] = dataset['slabs']
+            dataset['alloys'] = AlloysGenerator( self.ctx.alloys_fixed_species,
+                                                     self.inputs.alloys.alloy_species,
+                                                     self.inputs.alloys.num_structures,
+                                                     self.ctx.alloys_fractions,
+                                                            **datasets_for_alloys)['alloy_structures']
+        dataset['global_structures'] = WriteDataset(**dataset)['global_structures']
         self.out("structures", dataset)
