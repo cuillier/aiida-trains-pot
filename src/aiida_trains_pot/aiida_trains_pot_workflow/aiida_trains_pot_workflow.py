@@ -700,7 +700,9 @@ class TrainsPotWorkChain(WorkChain):
 
         if "random_input_structures_lammps" in self.inputs:
             if self.inputs.random_input_structures_lammps:
-                if "input_lammps_dataset" in self.ctx:
+                if "lammps_input_structures" in self.inputs:
+                    self.ctx.lammps_input_structures = self.inputs.lammps_input_structures
+                elif "input_lammps_dataset" in self.ctx:
                     self.ctx.lammps_input_structures = self.ctx.input_lammps_dataset
                 else:
                     self.ctx.lammps_input_structures = self.ctx.dataset
