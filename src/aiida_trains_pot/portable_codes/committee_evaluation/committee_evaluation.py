@@ -11,7 +11,6 @@ import numpy as np
 import torch
 
 from ase.io import read
-from mace.calculators import MACECalculator
 from prettytable import PrettyTable
 
 
@@ -149,6 +148,64 @@ def rmse_table(RMSE) -> PrettyTable:
                     ]
                 )
     return table
+
+
+def load_potentials(potential_files):
+    """Load potentials from files.
+
+    :param potential_files: List of potential file paths
+    :return: List of loaded calculator instances or None if loading failed
+    """
+    calculators = []
+
+    # --- Try loading as magnetic MACE potentials ---
+    try:
+        from mace.calculators.mace import MagneticMACECalculator
+        from mace.modules import MagneticSCFMACE
+
+        for potential_file in potential_files: 
+            model = torch.load(potential_file, map_location=device, weights_only=False)
+            # @TODO make these parameters accessible
+            # Shouldn't make much of a difference as a long as scf_tol << the uncertainty threshold
+            scf_wrapper = MagneticSCFMACE(
+                model,
+                n_scf_step=50,
+                scf_step_size=0.05,
+                scf_logging=False,
+                use_scf=True,
+                scf_tol=1e-5)
+            calc = MagneticMACECalculator(
+                models=[scf_wrapper],
+                magmom_key="equilibrated_magmom",
+                device=device)
+            calculators.append(calc)
+        return calculators
+
+    try:
+        from mace.calculators import MACECalculator
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        calculators = [MACECalculator(pot, device=device) for pot in potential_files]
+        logging.info(f"Loaded {len(calculators)} MACE potentials using {device}.")
+        return calculators  # ✅ success, return here
+
+    except Exception as e:
+        logging.warning(f"Failed to load MACE potentials: {e}")
+
+    # --- Try loading as METAtomic potentials ---
+    try:
+        from metatomic.torch.ase_calculator import MetatomicCalculator
+
+        calculators = [MetatomicCalculator(pot, extensions_directory="extensions/") for pot in potential_files]
+        logging.info(f"Loaded {len(calculators)} METAtomic potentials.")
+        return calculators  # ✅ success, return here
+
+    except Exception as e:
+        logging.error(f"Failed to load METAtomic potentials: {e}")
+
+    # --- If both failed ---
+    logging.error("❌ Unable to load any potential (MACE or METAtomic).")
+    return None
 
 
 def global_rmse(dataset):
@@ -312,12 +369,11 @@ def main(log_freq=100):  # noqa: PLR0912
     datasets = glob.glob("dataset*xyz")
 
     logging.info("Loading potentials...")
-    if torch.cuda.is_available():
-        calculators = [MACECalculator(potential_file, device="cuda") for potential_file in potential_files]
-    else:
-        calculators = [MACECalculator(potential_file, device="cpu") for potential_file in potential_files]
 
-    logging.info(f"Loaded {len(calculators)} potentials.\n")
+    calculators = load_potentials(potential_files)
+    if calculators is None:
+        logging.error("Failed to load any potentials. Aborting committee evaluation.")
+        return
 
     for jj, dataset in enumerate(datasets):
         dataset_name = dataset.replace(".xyz", "")
@@ -333,6 +389,12 @@ def main(log_freq=100):  # noqa: PLR0912
             evaluated_dataset[-1]["positions"] = np.array(atm.get_positions())
             evaluated_dataset[-1]["symbols"] = atm.get_chemical_symbols()
             evaluated_dataset[-1]["pbc"] = atm.get_pbc()
+            
+            if "start_magmom" in atm.arrays.keys():
+                evaluated_dataset[-1]["start_magmom"] = atm.arrays["start_magmom"]
+            if "dft_magmom" in atm.arrays.keys():
+                evaluated_dataset[-1]["dft_magmom"] = atm.arrays["dft_magmom"]
+            
             try:
                 evaluated_dataset[-1]["dft_energy"] = atm.get_potential_energy()
             except Exception:
@@ -354,6 +416,15 @@ def main(log_freq=100):  # noqa: PLR0912
                 n_pot += 1
                 atm.calc = calculator
 
+                # Initialize magnetic moments. Do this for each calculator because
+                # equilibrated_magmom will be modified in-place.
+                if "start_magmom" in atm.arrays.keys():
+                    atm.arrays["equilibrated_magmom"] = atm.arrays["start_magmom"]
+                elif "dft_magmom" in atm.arrays.keys():
+                    atm.arrays["equilibrated_magmom"] = atm.arrays["dft_magmom"]
+                else:
+                    atm.arrays["equilibrated_magmom"] = np.zeros((len(atm), 3))
+
                 energy.append(atm.get_potential_energy())
                 forces.append(np.array(atm.get_forces()))
                 stress.append(np.array(atm.get_stress(voigt=False)))
@@ -361,6 +432,7 @@ def main(log_freq=100):  # noqa: PLR0912
                 evaluated_dataset[-1][f"pot_{n_pot}_energy"] = atm.get_potential_energy()
                 evaluated_dataset[-1][f"pot_{n_pot}_forces"] = np.array(atm.get_forces())
                 evaluated_dataset[-1][f"pot_{n_pot}_stress"] = np.array(atm.get_stress(voigt=False))
+                evaluated_dataset[-1][f"pot_{n_pot}_magmom"] = atm.arrays["equilibrated_magmom"]
                 if "dft_energy" in evaluated_dataset[-1]:
                     evaluated_dataset[-1][f"pot_{n_pot}_energy_rmse"] = calc_rmse(
                         [evaluated_dataset[-1]["dft_energy"]],
