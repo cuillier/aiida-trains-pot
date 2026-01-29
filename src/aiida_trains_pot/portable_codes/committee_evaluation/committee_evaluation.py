@@ -181,6 +181,7 @@ def load_potentials(potential_files):
             calculators.append(calc)
         return calculators
 
+    # --- Try loading as standard MACE potentials ---
     try:
         from mace.calculators import MACECalculator
 

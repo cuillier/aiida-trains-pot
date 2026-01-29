@@ -410,19 +410,24 @@ def ReplicateStructures(min_dist, max_atoms, vacuum, input_structures):
 
 
 @calcfunction
-def MagneticGenerator(n_configs, frac_perturbed, selection_threshold, collinear, input_structures):
+def MagneticGenerator(
+    n_configs, 
+    frac_perturbed, 
+    selection_threshold, 
+    perturbation_magnitude, 
+    collinear, 
+    input_structures):
     """Randomly perturb and rotate magnetic moments.
 
     :param n_configs: Int with the number of configurations to generate per input structure
     :param frac_perturbed: Float with the fraction of atoms to perturb
-    :param selection_threshold: Float that sets the threshold moment "b" (in Bohr magnetons)
-                                for considering an atom with absolute magnetization "mu" to be magnetic. 
+    :param selection_threshold: Float that sets the threshold moment "b" (in Bohr magnetons) for considering an atom with absolute magnetization "mu" to be magnetic. 
                                 The random selection probability is weighted by
-                                    max(0, mu - b). 
-                                Setting this to a large value (greater than the valence of 
-                                the pseudopotential) yields completely random selection. Setting this 
-                                to some positive finite value will bias the selection toward 
-                                atoms with mu > b.
+                                    max(1e-6, mu - b). 
+                                Setting this to a value above the maximum possible magnetization yields completely selection. 
+                                Setting this to some positive finite value will encourage augmentation of magnetic atoms with mu > b.
+    :param perturbation_magnitude: Float with the magnitude of the perturbations in Bohr magnetons
+    :param collinear: Bool to project magnetic moments onto the z-axis when True.
     :param input_structures: A PESData dataset with the input structures
     """
     structures = []
@@ -455,7 +460,7 @@ def MagneticGenerator(n_configs, frac_perturbed, selection_threshold, collinear,
                     replace=False,
                     p=selection_probabilities)
             perturbations = np.random.choice(
-                    [-1.0, 1.0],
+                    [-perturbation_magnitude, perturbation_magnitude],
                     size=num_rattled,
                     replace=True)
 
@@ -592,6 +597,7 @@ class DatasetAugmentationWorkChain(WorkChain):
     DEFAULT_magnetic_n_configs = Int(50)
     DEFAULT_magnetic_frac_perturbed = Float(0.5)
     DEFAULT_magnetic_selection_threshold = Float(100.0)
+    DEFAULT_magnetic_perturbation_magnitude = Float(1.0)
     DEFAULT_magnetic_collinear = Bool(True)
 
     DEFAULT_do_rattle_strain_defects = Bool(True)
@@ -832,6 +838,14 @@ class DatasetAugmentationWorkChain(WorkChain):
             " a higher probability of being selected for perturbation. Values greater than"
             " the Z-valence of the pseudopotential yield completely random selection. "
             f"Default: {cls.DEFAULT_magnetic_selection_threshold}",
+        )
+        spec.input(
+            "magnetic.perturbation_magnitude",
+            valid_type=(Int, Float),
+            default=lambda: cls.DEFAULT_magnetic_perturbation_magnitude,
+            required=False,
+            help="Magnitude of the perturbation to apply to the magnetic moments, in Bohr magnetons."
+            f"Default: {cls.DEFAULT_magnetic_perturbation_magnitude}",
         )
         spec.input(
             "magnetic.collinear",
