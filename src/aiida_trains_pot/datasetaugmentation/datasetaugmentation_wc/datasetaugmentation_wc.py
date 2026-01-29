@@ -416,7 +416,7 @@ def MagneticGenerator(
     selection_threshold, 
     perturbation_magnitude, 
     collinear, 
-    input_structures):
+    **input_datasets):
     """Randomly perturb and rotate magnetic moments.
 
     :param n_configs: Int with the number of configurations to generate per input structure
@@ -428,61 +428,60 @@ def MagneticGenerator(
                                 Setting this to some positive finite value will encourage augmentation of magnetic atoms with mu > b.
     :param perturbation_magnitude: Float with the magnitude of the perturbations in Bohr magnetons
     :param collinear: Bool to project magnetic moments onto the z-axis when True.
-    :param input_structures: A PESData dataset with the input structures
+    :param input_datasets: Dict of generation_method: PESData structures to augment
     """
     structures = []
-    input_structures = input_structures.get_ase_list()
-
-    for structure in input_structures:
-        num_atoms = len(structure)
-        
-        if "start_magmom" in structure.arrays:
-            input_magmom = structure.arrays["start_magmom"]
-        elif "dft_magmom" in structure.arrays:
-            input_magmom = structure.arrays["dft_magmom"]
-        else:
-            input_magmom = np.zeros((num_atoms, 3))
-
-        absolute_moments = np.linalg.norm(input_magmom, axis=1)
-
-        # Weight random selection probabilities to favor magnetic atoms
-        excess_moments = absolute_moments - selection_threshold
-        selection_weights = np.where(excess_moments > 1e-6, excess_moments, 1e-6)
-        selection_probabilities = selection_weights / np.sum(selection_weights)
-
-        num_rattled = np.ceil(frac_perturbed * num_atoms).astype(int)
-
-        for _ in range(n_configs):
-            # Perturb the magnitude of the moments by +-1 Bohr magneton
-            perturbed_atoms = np.random.choice(
-                    num_atoms,
-                    size=num_rattled,
-                    replace=False,
-                    p=selection_probabilities)
-            perturbations = np.random.choice(
-                    [-perturbation_magnitude, perturbation_magnitude],
-                    size=num_rattled,
-                    replace=True)
-
-            # Assign random moment directions
-            directions = np.random.uniform(
-                    low=-1.0, high=1.0,
-                    size=(num_rattled, 3))
-            if collinear:
-                unit_directions = np.where(directions > 0.0, 1.0, -1.0)
-                unit_directions[[0,1],:] = 0.0
+    for input_structures in input_datasets.values():
+        for structure in input_structures:
+            num_atoms = len(structure)
+            
+            if "start_magmom" in structure.arrays:
+                input_magmom = structure.arrays["start_magmom"]
+            elif "dft_magmom" in structure.arrays:
+                input_magmom = structure.arrays["dft_magmom"]
             else:
-                unit_directions = directions / np.linalg.norm(directions, axis=1)
-            
-            # Create a new structure with the augmented starting magnetization
-            new_structure = structure.copy()
-            start_magmom = initial_magmom.copy()
-            
-            start_magmom[perturbed_atoms,:] = (absolute_moments[perturbed_atoms] + perturbations)[:,np.newaxis] \
-                                              * unit_directions
-            new_structure.arrays["start_magmom"] = start_magmom
-            structures.append(ase_to_dict(new_structure))
-            structures[-1]["gen_method"] = "MAGNETIC"
+                input_magmom = np.zeros((num_atoms, 3))
+
+            absolute_moments = np.linalg.norm(input_magmom, axis=1)
+
+            # Weight random selection probabilities to favor magnetic atoms
+            excess_moments = absolute_moments - selection_threshold
+            selection_weights = np.where(excess_moments > 1e-6, excess_moments, 1e-6)
+            selection_probabilities = selection_weights / np.sum(selection_weights)
+
+            num_rattled = np.ceil(frac_perturbed * num_atoms).astype(int)
+
+            for _ in range(n_configs):
+                # Perturb the magnitude of the moments by +-1 Bohr magneton
+                perturbed_atoms = np.random.choice(
+                        num_atoms,
+                        size=num_rattled,
+                        replace=False,
+                        p=selection_probabilities)
+                perturbations = np.random.choice(
+                        [-perturbation_magnitude, perturbation_magnitude],
+                        size=num_rattled,
+                        replace=True)
+
+                # Assign random moment directions
+                directions = np.random.uniform(
+                        low=-1.0, high=1.0,
+                        size=(num_rattled, 3))
+                if collinear:
+                    unit_directions = np.where(directions > 0.0, 1.0, -1.0)
+                    unit_directions[[0,1],:] = 0.0
+                else:
+                    unit_directions = directions / np.linalg.norm(directions, axis=1)
+                
+                # Create a new structure with the augmented starting magnetization
+                new_structure = structure.copy()
+                start_magmom = initial_magmom.copy()
+                
+                start_magmom[perturbed_atoms,:] = (absolute_moments[perturbed_atoms] + perturbations)[:,np.newaxis] \
+                                                  * unit_directions
+                new_structure.arrays["start_magmom"] = start_magmom
+                structures.append(ase_to_dict(new_structure))
+                structures[-1]["gen_method"] = "MAGNETIC"
 
     pes_dataset = PESData(structures)
     return {"magnetic_structures": pes_dataset}
@@ -594,7 +593,7 @@ class DatasetAugmentationWorkChain(WorkChain):
     DEFAULT_vacuum = Float(15.0)
     DEFAULT_max_substitution_fraction = Float(0.2)
     DEFAULT_substitution_fraction = Float(0.2)
-    DEFAULT_magnetic_n_configs = Int(50)
+    DEFAULT_magnetic_n_configs = Int(10)
     DEFAULT_magnetic_frac_perturbed = Float(0.5)
     DEFAULT_magnetic_selection_threshold = Float(100.0)
     DEFAULT_magnetic_perturbation_magnitude = Float(1.0)
@@ -976,12 +975,15 @@ class DatasetAugmentationWorkChain(WorkChain):
                 **datasets_to_substitute,
             )["substituted_structures"]
         if self.inputs.do_magnetic:
+            datasets_to_augment = {gen_method: structures for gen_method,structures in dataset.items() \
+                                   if gen_method in ["input_structures", "rattle_strain_defects_structures", "slabs"]}
             dataset["magnetic"] = MagneticGenerator(
                 self.inputs.magnetic.n_configs,
                 self.inputs.magnetic.frac_perturbed,
                 self.inputs.magnetic.selection_threshold,
+                self.inputs.magnetic.perturbation_magnitude,
                 self.inputs.magnetic.collinear,
-                input_structures=self.ctx.initial_dataseti
+                **datasets_to_augment,
             )["magnetic_structures"]    
         dataset["global_structures"] = WriteDataset(**dataset)["global_structures"]
         self.out("structures", dataset)
