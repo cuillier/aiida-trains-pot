@@ -216,35 +216,6 @@ class PESData(Data):
 
         return data
 
-    def get_ase_magmoms(self, atoms, start_key="start_magmom", dft_key="dft_magmom"):
-        """
-        Read magnetic moments from an ASE Atoms structure. 
-
-        If keys are found but the shape suggests a collinear calculation, 
-        assume the polarization direction is along the z-axis.        
-
-        :param atoms: ASE Atoms
-        :param start_key: Atoms.numbers key containing initial magnetic moments
-        :param dft_key: Atoms.numbers key containing final magnetic moments
-        :return start_magmom: (N,3) float ndarray or None
-        :return dft_magmom: (N,3) float ndarray or None
-        """
-        magmom_out = []
-        for key in [start_key, dft_key]: 
-            magmom = atoms.arrays.get(key, None)
-            
-            if magmom is not None:
-                magmom = np.array(magmom)   
-                # Reshape arrays in collinear case
-                if len(magmom.shape) == 1:
-                    direction = np.zeros((len(atoms), 3))
-                    direction[:,2] = 1.0    # Assume polarization in z-direction
-                    magmom = direction * magmom[:,np.newaxis]
-
-            magmom_out.append(magmom)    
-
-        return magmom_out
-
     def set_ase(self, data, save_labels=True):
         """Set the contents of this node by saving a list of ASE Atoms objects as an HDF5 file.
 
@@ -270,8 +241,6 @@ class PESData(Data):
         for atm in data:
             info = atm.info
             
-            start_magmom, dft_magmom = self.get_ase_magmoms(atm)
-            
             if save_labels and (isinstance(atm.calc, dft_calc) or isinstance(atm.calc, single_calc)):
                 num_labelled_frames += 1
                 
@@ -283,10 +252,10 @@ class PESData(Data):
                         "dft_energy": atm.calc.results["energy"],
                         "dft_forces": atm.calc.results["forces"],
                     }
-                if start_magmom is not None:
-                    data_to_save["start_magmom"] = start_magmom
-                if dft_magmom is not None:
-                    data_to_save["dft_magmom"] = dft_magmom
+                if "start_magmom" in atm.arrays.keys():
+                    data_to_save["start_magmom"] = atm.arrays["start_magmom"]
+                if "dft_magmom" in atm.arrays.keys():
+                    data_to_save["dft_magmom"] = atm.arrays["dft_magmom"]
                 else:
                     # If we don't find magnetic moments in a labelled structure,
                     #   assume it came from an unpolarized calculation 
@@ -311,8 +280,8 @@ class PESData(Data):
                         "positions": atm.get_positions(),
                         "pbc": atm.pbc,
                     }
-                if start_magmom is not None:
-                    data_to_save["start_magmom"] = start_magmom
+                if "start_magmom" in atom.arrays.keys():
+                    data_to_save["start_magmom"] = atm.arrays["start_magmom"]
 
                 save_data.append(data_to_save)
                 
@@ -357,7 +326,7 @@ class PESData(Data):
             if "dft_forces" in item and "dft_energy" in item:
                 num_labelled_frames += 1
                 if "dft_magmom" not in item:
-                    # If we don't find magnetic moments in a labelled structure,
+                    # If there are no magnetic moments in a labelled structure,
                     #   assume it came from an unpolarized calculation
                     item["dft_magmom"] = np.zeros((len(item["dft_forces"]),3))
             else:

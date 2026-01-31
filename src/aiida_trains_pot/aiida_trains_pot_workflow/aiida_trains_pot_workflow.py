@@ -697,7 +697,6 @@ class TrainsPotWorkChain(WorkChain):
     def exploration(self):
         """Run exploration."""
         inputs = self.exposed_inputs(ExplorationWorkChain, namespace="exploration")
-        inputs.potential_lammps = self.ctx.potentials_lammps[-1]
 
         if "random_input_structures_lammps" in self.inputs:
             if self.inputs.random_input_structures_lammps:
@@ -735,6 +734,7 @@ class TrainsPotWorkChain(WorkChain):
         if self.inputs.bypass_exploration:
             self.report("Skipped ExplorationWorkChain")
         else:
+            inputs.potential_lammps = self.ctx.potentials_lammps[-1]
             inputs.lammps_input_structures = self.ctx.lammps_input_structures
             inputs.sampling_time = self.inputs.frame_extraction.sampling_time
 
