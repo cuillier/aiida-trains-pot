@@ -129,15 +129,7 @@ def SelectToLabel(evaluated_dataset, thr_energy, thr_forces, thr_stress, max_fra
                     + config["forces_deviation"] / thr_forces
                     + config["stress_deviation"] / thr_stress
                 )
-            # Assign initial magnetic moments if the structure came
-            #   from a MagneticMACE committee
-            magmom_keys = [match.string for match in \
-                           [re.search(r"pot_\d+_magmom", key) for key in config.keys()] \
-                           if match is not None]
-            if magmom_keys:
-                # Randomly select which set of initial magnetic moments to use
-                magmom_source = random.sample(magmom_keys, 1)
-                selected_dataset[-1]["start_magmom"] = config[magmom_source]
+            selected_dataset[-1]["start_magmom"] = config["evaluated_magmom"]
 
     if max_frames:
         if len(selected_dataset) > max_frames:
@@ -747,7 +739,7 @@ class TrainsPotWorkChain(WorkChain):
         """Run exploration frame extraction."""
         # for _, trajectory in self.ctx.trajectories.items():
         if self.inputs.bypass_exploration:
-            explored_dataset = self.ctx.trajectories.values()
+            explored_dataset = self.ctx.lammps_input_structures
         else:
             parameters = AttributeDict(self.inputs.exploration.parameters)
             dump_rate = int(self.inputs.frame_extraction.sampling_time / parameters.control.timestep)
@@ -802,14 +794,26 @@ class TrainsPotWorkChain(WorkChain):
         for _, calc in enumerate(self.ctx.training.outputs.training.values()):
             if "checkpoints" in calc:
                 self.ctx.potential_checkpoints.append(calc["checkpoints"])
+            
+            # Collect ASE potentials
             if "model_stage2_ase" in calc:
                 self.ctx.potentials_ase.append(calc["model_stage2_ase"])
             elif "model_stage1_ase" in calc:
                 self.ctx.potentials_ase.append(calc["model_stage1_ase"])
+            else:
+                # Resort to the pytorch model if the model compiled for cuda-equivariance is not found
+                # Still relevant for older GPUs, development versions of MACE
+                if "model_stage2_pytorch" in calc:
+                    self.ctx.potentials_ase.append(calc["model_stage2_pytorch"])
+                elif "model_stage1_pytorch" in calc:
+                    self.ctx.potentials_ase.append(calc["model_stage1_pytorch"])
+            
+            # Collect LAMMPS potentials
             if "model_stage2_lammps" in calc:
                 self.ctx.potentials_lammps.append(calc["model_stage2_lammps"])
             elif "model_stage1_lammps" in calc:
                 self.ctx.potentials_lammps.append(calc["model_stage1_lammps"])
+            
             if "model" in calc:
                 self.ctx.potentials_lammps.append(calc["model"])
                 self.ctx.potentials_ase.append(calc["model"])
@@ -819,11 +823,7 @@ class TrainsPotWorkChain(WorkChain):
     def finalize_exploration(self):
         """Finalize exploration and collect trajectories."""
         if self.inputs.bypass_exploration:
-            if len(self.ctx.lammps_input_structures) < 1:
-                return self.exit_codes.NO_MD_CALCULATIONS
-            
-            self.ctx.trajectories = {f"exploration_{ii}": value \
-                for ii,value in enumerate(self.ctx.lammps_input_structures)}
+            self.ctx.trajectories = {}
         else:
             if len(self.ctx.exploration.outputs.md) < 1:
                 return self.exit_codes.NO_MD_CALCULATIONS

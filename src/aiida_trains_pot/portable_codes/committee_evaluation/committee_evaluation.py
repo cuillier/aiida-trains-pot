@@ -163,23 +163,27 @@ def load_potentials(potential_files):
         from mace.calculators.mace import MagneticMACECalculator
         from mace.modules import MagneticSCFMACE
 
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
         for potential_file in potential_files: 
             model = torch.load(potential_file, map_location=device, weights_only=False)
-            # @TODO make these parameters accessible
-            # Shouldn't make much of a difference as a long as scf_tol << the uncertainty threshold
+            # Don't relax magnetic moments, because this will give incorrect predictions for labelled structures.
             scf_wrapper = MagneticSCFMACE(
                 model,
                 n_scf_step=50,
                 scf_step_size=0.05,
                 scf_logging=False,
-                use_scf=True,
+                use_scf=False,
                 scf_tol=1e-5)
             calc = MagneticMACECalculator(
                 models=[scf_wrapper],
-                magmom_key="equilibrated_magmom",
+                magmom_key="evaluated_magmom",
                 device=device)
             calculators.append(calc)
         return calculators
+
+    except Exception as e:
+        logging.warning(f"Failed to load magnetic MACE potentials: {e}")    
 
     # --- Try loading as standard MACE potentials ---
     try:
@@ -390,7 +394,18 @@ def main(log_freq=100):  # noqa: PLR0912
             evaluated_dataset[-1]["positions"] = np.array(atm.get_positions())
             evaluated_dataset[-1]["symbols"] = atm.get_chemical_symbols()
             evaluated_dataset[-1]["pbc"] = atm.get_pbc()
-            
+
+            # Set magnetic moments to evaluate
+            # Prioritize dft_magmom > start_magmom > zeros
+            if "dft_magmom" in atm.arrays.keys():
+                atm.arrays["evaluated_magmom"] = np.array(atm.arrays["dft_magmom"])
+            elif "start_magmom" in atm.arrays.keys():
+                atm.arrays["evaluated_magmom"] = np.array(atm.arrays["start_magmom"])
+            else:
+                atm.arrays["evaluated_magmom"] = np.zeros((len(atm), 3))
+            evaluated_dataset[-1]["evaluated_magmom"] = atm.arrays["evaluated_magmom"]
+
+            # Log magnetic moments
             if "start_magmom" in atm.arrays.keys():
                 evaluated_dataset[-1]["start_magmom"] = atm.arrays["start_magmom"]
             if "dft_magmom" in atm.arrays.keys():
@@ -416,16 +431,7 @@ def main(log_freq=100):  # noqa: PLR0912
             for calculator in calculators:
                 n_pot += 1
                 atm.calc = calculator
-
-                # Initialize magnetic moments. Do this for each calculator because
-                # equilibrated_magmom will be modified in-place.
-                if "start_magmom" in atm.arrays.keys():
-                    atm.arrays["equilibrated_magmom"] = atm.arrays["start_magmom"]
-                elif "dft_magmom" in atm.arrays.keys():
-                    atm.arrays["equilibrated_magmom"] = atm.arrays["dft_magmom"]
-                else:
-                    atm.arrays["equilibrated_magmom"] = np.zeros((len(atm), 3))
-
+                
                 energy.append(atm.get_potential_energy())
                 forces.append(np.array(atm.get_forces()))
                 stress.append(np.array(atm.get_stress(voigt=False)))
@@ -433,7 +439,6 @@ def main(log_freq=100):  # noqa: PLR0912
                 evaluated_dataset[-1][f"pot_{n_pot}_energy"] = atm.get_potential_energy()
                 evaluated_dataset[-1][f"pot_{n_pot}_forces"] = np.array(atm.get_forces())
                 evaluated_dataset[-1][f"pot_{n_pot}_stress"] = np.array(atm.get_stress(voigt=False))
-                evaluated_dataset[-1][f"pot_{n_pot}_magmom"] = atm.arrays["equilibrated_magmom"]
                 if "dft_energy" in evaluated_dataset[-1]:
                     evaluated_dataset[-1][f"pot_{n_pot}_energy_rmse"] = calc_rmse(
                         [evaluated_dataset[-1]["dft_energy"]],
