@@ -167,23 +167,13 @@ def load_potentials(potential_files):
         
         for potential_file in potential_files: 
             model = torch.load(potential_file, map_location=device, weights_only=False)
-            # Don't relax magnetic moments, because this will give incorrect predictions for labelled structures.
-            scf_wrapper = MagneticSCFMACE(
-                model,
-                n_scf_step=50,
-                scf_step_size=0.05,
-                scf_logging=False,
-                use_scf=False,
-                scf_tol=1e-5)
-            calc = MagneticMACECalculator(
-                models=[scf_wrapper],
-                magmom_key="evaluated_magmom",
-                device=device)
+            scf_wrapper = MagneticSCFMACE(model, use_scf=False)
+            calc = MagneticMACECalculator(models=[scf_wrapper], magmom_key="start_magmom", device=device)
             calculators.append(calc)
         return calculators
 
     except Exception as e:
-        logging.warning(f"Failed to load magnetic MACE potentials: {e}")    
+        logging.info(f"Failed to load magnetic MACE potentials: {e}")    
 
     # --- Try loading as standard MACE potentials ---
     try:
@@ -195,7 +185,7 @@ def load_potentials(potential_files):
         return calculators  # ✅ success, return here
 
     except Exception as e:
-        logging.warning(f"Failed to load MACE potentials: {e}")
+        logging.info(f"Failed to load MACE potentials: {e}")
 
     # --- Try loading as METAtomic potentials ---
     try:
@@ -395,22 +385,17 @@ def main(log_freq=100):  # noqa: PLR0912
             evaluated_dataset[-1]["symbols"] = atm.get_chemical_symbols()
             evaluated_dataset[-1]["pbc"] = atm.get_pbc()
 
-            # Set magnetic moments to evaluate
+            # Initialize and log magnetic moments
             # Prioritize dft_magmom > start_magmom > zeros
             if "dft_magmom" in atm.arrays.keys():
-                atm.arrays["evaluated_magmom"] = np.array(atm.arrays["dft_magmom"])
+                atm.arrays["start_magmom"] = np.array(atm.arrays["dft_magmom"])
+                evaluated_dataset[-1]["dft_magmom"] = atm.arrays["dft_magmom"] 
             elif "start_magmom" in atm.arrays.keys():
-                atm.arrays["evaluated_magmom"] = np.array(atm.arrays["start_magmom"])
+                pass # start_magmom already set
             else:
-                atm.arrays["evaluated_magmom"] = np.zeros((len(atm), 3))
-            evaluated_dataset[-1]["evaluated_magmom"] = atm.arrays["evaluated_magmom"]
+                atm.arrays["start_magmom"] = np.zeros((len(atm), 3))
+            evaluated_dataset[-1]["start_magmom"] = atm.arrays["start_magmom"]
 
-            # Log magnetic moments
-            if "start_magmom" in atm.arrays.keys():
-                evaluated_dataset[-1]["start_magmom"] = atm.arrays["start_magmom"]
-            if "dft_magmom" in atm.arrays.keys():
-                evaluated_dataset[-1]["dft_magmom"] = atm.arrays["dft_magmom"]
-            
             try:
                 evaluated_dataset[-1]["dft_energy"] = atm.get_potential_energy()
             except Exception:
@@ -430,6 +415,7 @@ def main(log_freq=100):  # noqa: PLR0912
 
             for calculator in calculators:
                 n_pot += 1
+                calculator.reset()  # Needed for MagneticMACE to avoid magmom caching problems
                 atm.calc = calculator
                 
                 energy.append(atm.get_potential_energy())
@@ -439,6 +425,11 @@ def main(log_freq=100):  # noqa: PLR0912
                 evaluated_dataset[-1][f"pot_{n_pot}_energy"] = atm.get_potential_energy()
                 evaluated_dataset[-1][f"pot_{n_pot}_forces"] = np.array(atm.get_forces())
                 evaluated_dataset[-1][f"pot_{n_pot}_stress"] = np.array(atm.get_stress(voigt=False))
+                
+                # MagneticMACE stores the evaluated magnetic moments in "dft_magmom"
+                if "dft_magmom" in atm.arrays.keys():
+                    evaluated_dataset[-1]["evaluated_magmom"] = np.array(atm.arrays["dft_magmom"])
+
                 if "dft_energy" in evaluated_dataset[-1]:
                     evaluated_dataset[-1][f"pot_{n_pot}_energy_rmse"] = calc_rmse(
                         [evaluated_dataset[-1]["dft_energy"]],
@@ -454,6 +445,7 @@ def main(log_freq=100):  # noqa: PLR0912
                         evaluated_dataset[-1]["dft_stress"],
                         np.array(atm.get_stress(voigt=False)).ravel(),
                     )
+ 
             evaluated_dataset[-1]["energy_deviation"] = maximum_deviation(np.array(energy))
             evaluated_dataset[-1]["forces_deviation"] = maximum_deviation(np.array(forces))
             evaluated_dataset[-1]["stress_deviation"] = maximum_deviation(np.array(stress))
@@ -466,7 +458,7 @@ def main(log_freq=100):  # noqa: PLR0912
                     f"Frames {ii+1:5d}/{len(atoms)} evaluated - time remaining for dataset {jj+1}:"
                     f"{((time_f-time_i)/(ii+1))*(len(atoms)-ii):.2f} s"
                 )
-
+       
         logging.info(f"Evaluation finished for dataset {jj+1}.")
         logging.info(f"Saving evaluated dataset {jj+1}...")
         np.savez(f"{dataset_name}_evaluated.npz", evaluated_dataset=evaluated_dataset)

@@ -280,7 +280,7 @@ class PESData(Data):
                         "positions": atm.get_positions(),
                         "pbc": atm.pbc,
                     }
-                if "start_magmom" in atom.arrays.keys():
+                if "start_magmom" in atm.arrays.keys():
                     data_to_save["start_magmom"] = atm.arrays["start_magmom"]
 
                 save_data.append(data_to_save)

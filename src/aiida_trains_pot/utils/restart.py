@@ -31,6 +31,10 @@ def models_from_trainingwc(builder, identifier, get_labelled_dataset=False, get_
                 models_ase[trainings] = outputs["training"][trainings]["model_stage2_ase"]
             elif "model_stage1_ase" in outputs["training"][trainings]:
                 models_ase[trainings] = outputs["training"][trainings]["model_stage1_ase"]
+            elif "model_stage2_pytorch" in outputs["training"][trainings]:
+                models_ase[trainings] = outputs["training"][trainings]["model_stage2_pytorch"]
+            elif "model_stage1_pytorch" in outputs["training"][trainings]:
+                models_ase[trainings] = outputs["training"][trainings]["model_stage1_pytorch"]
             if "model_stage2_lammps" in outputs["training"][trainings]:
                 models_lammps[trainings] = outputs["training"][trainings]["model_stage2_lammps"]
             elif "model_stage1_lammps" in outputs["training"][trainings]:
