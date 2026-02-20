@@ -14,6 +14,7 @@ import warnings
 import numpy as np
 
 PwBaseWorkChain = WorkflowFactory("quantumespresso.pw.base")
+PwConstrainedWorkChain = WorkflowFactory("trains_pot.constrained")
 PESData = DataFactory("pesdata")
 
 
@@ -51,7 +52,6 @@ def WriteLabelledDataset(non_labelled_structures, **labelled_data):
                 magmoms = magnetization_directions * value["output_trajectory"].get_array("atomic_magnetic_moments")[-1,:,np.newaxis]
             elif value["output_parameters"].dict.number_of_spin_components == 4: # Non-collinear
                 # @TODO as of v5.0.0a1, aiida-quantumespresso does not parse the atomic_magnetic_moments for non-collinear calculations.
-                # Best solution is to 
                 magmoms = value["output_trajectory"].get_array("atomic_magnetic_moments")[-1,:,:]
         labelled_dataset[-1]["dft_magmom"] = magmoms.tolist()
 
@@ -73,25 +73,35 @@ class AbInitioLabellingWorkChain(WorkChain):
             valid_type=List, 
             help="List of keyword arguments for HubbardStructureData.initialize_onsites_hubbard(). One Dict per atomic species.",
             required=False,
-            default=lambda: List([]) )
+            default=lambda: List([])
+        )
         spec.input(
             "intersites_hubbard",
             valid_type=List,
             help="List of keyword arguments for HubbardStructureData.initialize_intersites_hubbard(). One Dict per pair.",
             required=False,    
-            default=lambda: List([]) ) 
+            default=lambda: List([])
+        ) 
         spec.input(
             "spin_type",
             valid_type=EnumData,
             help="SpinType.NONE, SpinType.COLLINEAR, SpinType.NON_COLLINEAR, SpinType.SPIN_ORBIT",
             required=False,
-            default=lambda: EnumData(SpinType.NONE))
+            default=lambda: EnumData(SpinType.NONE)
+        )
         spec.input(
             "batch_size",
             valid_type=Int,
             help="Number of structures to label in each batch.",
             required=False,
             default=lambda: Int(1000),
+        )
+        spec.input(
+            "lambda_series",
+            valid_type=List,
+            help="If provided, perform a series of constrained magnetization calculations with the specified lambda values.",
+            required=False,
+            default=lambda: List([]) 
         )
 
         spec.inputs.validator = cls.validate_inputs
@@ -255,11 +265,20 @@ class AbInitioLabellingWorkChain(WorkChain):
 
             default_inputs = {"CONTROL": {"calculation": "scf", "tstress": True, "tprnfor": True}}
             inputs.pw.parameters = Dict(recursive_merge(default_inputs, inputs.pw.parameters.get_dict()))
-            
             inputs = prepare_process_inputs(PwBaseWorkChain, inputs)
-            # Submit the workchain
-            future = self.submit(PwBaseWorkChain, **inputs)
-            self.report(f"Launched AbInitioLabellingWorkChain for configuration {self.ctx.config} <{future.pk}>")
+
+            if self.inputs.lambda_series:
+                constrained_inputs = Dict()
+                constrained_inputs.base = inputs
+                constrained_inputs.lambda_series = self.inputs.lambda_series
+                constrained_inputs = prepare_process_inputs(PwConstrainedWorkChain, constrained_inputs)
+                # Submit the workchain
+                future = self.submit(PwConstrainedWorkChain, **constrained_inputs)
+                self.report(f"Launched PwConstrainedWorkChain for configuration {self.ctx.config} <{future.pk}>")
+            else:  
+                # Submit the workchain
+                future = self.submit(PwBaseWorkChain, **inputs)
+                self.report(f"Launched PwBaseWorkChain for configuration {self.ctx.config} <{future.pk}>")
 
             # Add the calculation to the group
             group.add_nodes(future)
@@ -271,7 +290,15 @@ class AbInitioLabellingWorkChain(WorkChain):
         """Finalize the workchain and collect labelled data."""
         ab_initio_labelling_data = {}
         for ii, calc in enumerate(self.ctx.ab_initio_labelling_calculations):
-            if calc.exit_status == 0:
+            if calc.exit_status > 0:
+                continue
+            if "constrained_results" in calc.outputs:
+                for constrained_results in calc.outputs.constrained_results.values():
+                    ab_initio_labelling_data[f"abinitiolabelling_{ii}_{constrained_results.lambda}"] = {
+                        "output_parameters": constrained_results.workchain.outputs.output_parameters,
+                        "output_trajectory": constrained_results.workchain.outputs.output_trajectory,
+                    }
+            else:
                 ab_initio_labelling_data[f"abinitiolabelling_{ii}"] = {
                     "output_parameters": calc.outputs.output_parameters,
                     "output_trajectory": calc.outputs.output_trajectory,

@@ -43,7 +43,7 @@ Source = "https://github.com/aiida-trieste-developers/aiida-trains-pot"
 "trains_pot.exploration"      = "aiida_trains_pot.aiida_trains_pot_workflow.exploration_wc:ExplorationWorkChain"
 "trains_pot.lammpsmd"         = "aiida_trains_pot.lammps.lammps_wc.lammps_wc:LammpsWorkChain"
 "trains_pot.workflow"         = "aiida_trains_pot.aiida_trains_pot_workflow.aiida_trains_pot_workflow:TrainsPotWorkChain"
-
+"trains_pot.constrained"      = "aiida_trains_pot.abinitiolabelling.quantumespresso.constrained:PwConstrainedWorkChain"
 
 
 [project.entry-points.'aiida.calculations']
