@@ -300,14 +300,15 @@ class AbInitioLabellingWorkChain(WorkChain):
         for ii, calc in enumerate(self.ctx.ab_initio_labelling_calculations):
             if calc.exit_status > 0:
                 continue
-
-            if isinstance(calc, PwConstrainedWorkChain):
-                for jj,base_workchain in enumerate(calc.outputs.converged_workchains):
-                    ab_initio_labelling_data[f"abinitiolabelling_{ii}_{jj}"] = {
-                        "output_parameters": base_workchain.outputs.output_parameters,
-                        "output_trajectory": base_workchain.outputs.output_trajectory,
+            
+            # From a PwConstrainedWorkChain or other workchain that calls multiple PwBaseWorkChains
+            if 'converged_workchains' in calc.outputs:  
+                for label, calc_outputs in calc.outputs.converged_workchains.items():
+                    ab_initio_labelling_data[f"abinitiolabelling_{ii}_{label}"] = {i
+                        "output_parameters": calc_outputs.output_parameters,
+                        "output_trajectory": calc_outputs.output_trajectory,
                     }
-            else:
+            else:   # Normal PwBaseWorkChain
                 ab_initio_labelling_data[f"abinitiolabelling_{ii}"] = {
                     "output_parameters": calc.outputs.output_parameters,
                     "output_trajectory": calc.outputs.output_trajectory,
