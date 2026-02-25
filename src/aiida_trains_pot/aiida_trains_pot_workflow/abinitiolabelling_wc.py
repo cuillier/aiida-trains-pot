@@ -103,6 +103,13 @@ class AbInitioLabellingWorkChain(WorkChain):
             required=False,
             default=lambda: List([]) 
         )
+        spec.input(
+            'constrained_kinds', 
+            valid_type=List, 
+            required=False,
+            default=None,
+            help="If provided, only apply constraints to kinds matching the provided symbols (e.g., `Co`)"
+        )
 
         spec.inputs.validator = cls.validate_inputs
 
@@ -265,18 +272,19 @@ class AbInitioLabellingWorkChain(WorkChain):
 
             default_inputs = {"CONTROL": {"calculation": "scf", "tstress": True, "tprnfor": True}}
             inputs.pw.parameters = Dict(recursive_merge(default_inputs, inputs.pw.parameters.get_dict()))
-            inputs = prepare_process_inputs(PwBaseWorkChain, inputs)
-
+            
+            # Submit a constrained magnetization work chain
             if self.inputs.lambda_series:
-                constrained_inputs = Dict()
-                constrained_inputs.base = inputs
+                constrained_inputs = AttributeDict()
+                constrained_inputs.quantumespresso = inputs
                 constrained_inputs.lambda_series = self.inputs.lambda_series
+                constrained_inputs.constrained_kinds = self.inputs.constrained_kinds
                 constrained_inputs = prepare_process_inputs(PwConstrainedWorkChain, constrained_inputs)
-                # Submit the workchain
                 future = self.submit(PwConstrainedWorkChain, **constrained_inputs)
                 self.report(f"Launched PwConstrainedWorkChain for configuration {self.ctx.config} <{future.pk}>")
+            # Submit a normal pw.x work chain
             else:  
-                # Submit the workchain
+                inputs = prepare_process_inputs(PwBaseWorkChain, inputs)
                 future = self.submit(PwBaseWorkChain, **inputs)
                 self.report(f"Launched PwBaseWorkChain for configuration {self.ctx.config} <{future.pk}>")
 
@@ -292,11 +300,12 @@ class AbInitioLabellingWorkChain(WorkChain):
         for ii, calc in enumerate(self.ctx.ab_initio_labelling_calculations):
             if calc.exit_status > 0:
                 continue
-            if "constrained_results" in calc.outputs:
-                for constrained_results in calc.outputs.constrained_results.values():
-                    ab_initio_labelling_data[f"abinitiolabelling_{ii}_{constrained_results.lambda}"] = {
-                        "output_parameters": constrained_results.workchain.outputs.output_parameters,
-                        "output_trajectory": constrained_results.workchain.outputs.output_trajectory,
+
+            if isinstance(calc, PwConstrainedWorkChain):
+                for jj,base_workchain in enumerate(calc.outputs.converged_workchains):
+                    ab_initio_labelling_data[f"abinitiolabelling_{ii}_{jj}"] = {
+                        "output_parameters": base_workchain.outputs.output_parameters,
+                        "output_trajectory": base_workchain.outputs.output_trajectory,
                     }
             else:
                 ab_initio_labelling_data[f"abinitiolabelling_{ii}"] = {

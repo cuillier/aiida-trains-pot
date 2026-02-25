@@ -129,7 +129,8 @@ def SelectToLabel(evaluated_dataset, thr_energy, thr_forces, thr_stress, max_fra
                     + config["forces_deviation"] / thr_forces
                     + config["stress_deviation"] / thr_stress
                 )
-            selected_dataset[-1]["start_magmom"] = config["evaluated_magmom"]
+            if "evaluated_magmom" in config.keys():
+                selected_dataset[-1]["start_magmom"] = config["evaluated_magmom"]
 
     if max_frames:
         if len(selected_dataset) > max_frames:
