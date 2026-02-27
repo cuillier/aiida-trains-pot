@@ -1,22 +1,35 @@
-"""Workchain to perform training of MACE potentials."""
+"""Training workchain for AiiDA TrainsPot."""
 
 import itertools
 import random
-import time
 
 from aiida.engine import WorkChain, append_, calcfunction
-from aiida.orm import Bool, FolderData, Int
+from aiida.orm import Bool, Float, FolderData, Int, Str
 from aiida.plugins import DataFactory, WorkflowFactory
 
+MetaWorkChain = WorkflowFactory("trains_pot.metatrain")
 MaceWorkChain = WorkflowFactory("trains_pot.macetrain")
 PESData = DataFactory("pesdata")
 
+DEFAULT_NON_TRAIN_FRAC = Float(0.2)
+DEFAULT_SEED = Int(42)
+
 
 @calcfunction
-def SplitDataset(dataset):
-    """Divide dataset into training, validation and test sets."""
-    # data = self.inputs.dataset_list.get_list()
+def SplitDataset(
+    dataset,
+    non_training_fraction=DEFAULT_NON_TRAIN_FRAC,
+    seed=DEFAULT_SEED,
+):
+    """Split dataset preserving groups with stochastic rounding."""
     data = dataset.get_list()
+
+    if not (0.0 < non_training_fraction.value < 1.0):
+        raise ValueError("non_training_fraction must be between 0 and 1")
+
+    train_p = 1.0 - non_training_fraction.value
+
+    rng = random.Random(seed.value)
 
     exclude_list = [
         "energy",
@@ -30,72 +43,61 @@ def SplitDataset(dataset):
         "sigma_strain",
     ]
 
-    # Define a function to extract the grouping key
-    def check_esclude_list(string):
-        for el in exclude_list:
-            if el in string:
-                return False
-        return True
+    def check_exclude(key):
+        return not any(el in key for el in exclude_list)
 
     def get_grouping_key(d):
-        return tuple((k, v) for k, v in d.items() if check_esclude_list(k))
+        return tuple((k, v) for k, v in d.items() if check_exclude(k))
 
-    # Sort the data based on the grouping key
     sorted_data = sorted(data, key=get_grouping_key)
-
-    # Group the sorted data by the grouping key
     grouped_data = itertools.groupby(sorted_data, key=get_grouping_key)
 
-    # Iterate over the groups and print the group key and the list of dictionaries in each group
     training_set = []
     validation_set = []
     test_set = []
 
     for _, group in grouped_data:
-        # Calculate the number of elements for each set
         group_list = list(group)
-        if "gen_method" in group_list[0].keys():
+
+        # ---- Forced assignment ----
+        if "gen_method" in group_list[0]:
             if (
-                group_list[0]["gen_method"] == "INPUT_STRUCTURE"
-                or group_list[0]["gen_method"] == "ISOLATED_ATOM"
+                group_list[0]["gen_method"] in ["INPUT_STRUCTURE", "ISOLATED_ATOM", "EQUILIBRIUM"]
                 or len(group_list[0]["positions"]) == 1
-                or group_list[0]["gen_method"] == "EQUILIBRIUM"
             ):
                 training_set += group_list
                 continue
-        if "set" in group_list[0].keys():
-            if group_list[0]["set"] == "TRAINING":
+        if "set" in group_list[0]:
+            label = group_list[0]["set"]
+            if label == "TRAINING":
                 training_set += group_list
                 continue
-            elif group_list[0]["set"] == "VALIDATION":
+            if label == "VALIDATION":
                 validation_set += group_list
                 continue
-            elif group_list[0]["set"] == "TEST":
+            if label == "TEST":
                 test_set += group_list
                 continue
-        total_elements = len(group_list)
-        training_size = round(0.8 * total_elements)
 
-        random.seed(int(time.time()))
-        _ = random.shuffle(group_list)
+        rng.shuffle(group_list)
 
+        total = len(group_list)
+        exp_train = int(total * train_p)
         # Split the data into sets
-        training_set += group_list[:training_size]
-        validation_set += group_list[training_size:][::2]
-        test_set += group_list[training_size:][1::2]
+        training_set += group_list[:exp_train]
+        validation_set += group_list[exp_train:][::2]
+        test_set += group_list[exp_train:][1::2]
 
-    for ii in range(len(training_set)):
-        training_set[ii]["set"] = "TRAINING"
-        if "gen_method" not in training_set[ii].keys():
-            training_set[ii]["gen_method"] = "UNKNOWN"
-    for ii in range(len(validation_set)):
-        validation_set[ii]["set"] = "VALIDATION"
-        if "gen_method" not in validation_set[ii].keys():
-            validation_set[ii]["gen_method"] = "UNKNOWN"
-    for ii in range(len(test_set)):
-        test_set[ii]["set"] = "TEST"
-        if "gen_method" not in test_set[ii].keys():
-            test_set[ii]["gen_method"] = "UNKNOWN"
+    # ---- tagging ----
+    def tag(lst, label):
+        for el in lst:
+            el["set"] = label
+            if "gen_method" not in el:
+                el["gen_method"] = "UNKNOWN"
+
+    tag(training_set, "TRAINING")
+    tag(validation_set, "VALIDATION")
+    tag(test_set, "TEST")
 
     def _pop_non_isolated(training_set):
         """Pop a random non-ISOLATED_ATOM element from training_set."""
@@ -126,25 +128,42 @@ def SplitDataset(dataset):
     pes_test_set = PESData()
     pes_test_set.set_list(test_set)
 
-    pes_global_splitted = PESData()
-    pes_global_splitted.set_list(validation_set + test_set + training_set)
+    pes_global = PESData()
+    pes_global.set_list(training_set + validation_set + test_set)
 
     return {
         "train_set": pes_training_set,
         "validation_set": pes_validation_set,
         "test_set": pes_test_set,
-        "global_splitted": pes_global_splitted,
+        "global_splitted": pes_global,
     }
 
 
 class TrainingWorkChain(WorkChain):
     """A workchain to loop over structures and submit MACEWorkChain."""
 
+    ######################################################
+    ##                 DEFAULT VALUES                   ##
+    ######################################################
+    DEFAULT_training_engine = "MACE"
+
+    ACCEPTED_ENGINES = ["MACE", "META"]
+    ######################################################
+
     @classmethod
     def define(cls, spec):
         """Input and output specification."""
         super().define(spec)
         spec.input("num_potentials", valid_type=Int, default=lambda: Int(1), required=False)
+        spec.input("non_training_fraction", valid_type=Float, default=lambda: Float(0.2), required=False)
+        spec.input(
+            "engine",
+            default=lambda: Str(cls.DEFAULT_training_engine),
+            valid_type=Str,
+            help="Training engine",
+            required=True,
+            validator=cls.validate_engine,
+        )
         spec.input(
             "dataset",
             valid_type=PESData,
@@ -160,8 +179,16 @@ class TrainingWorkChain(WorkChain):
             MaceWorkChain,
             namespace="mace",
             exclude=("train.training_set", "train.validation_set", "train.test_set"),
-            namespace_options={"validator": None},
+            namespace_options={"validator": None, "required": False, "populate_defaults": False},
         )
+        spec.expose_inputs(
+            MetaWorkChain,
+            namespace="meta",
+            exclude=("train.training_set", "train.validation_set", "train.test_set"),
+            namespace_options={"validator": None, "required": False, "populate_defaults": False},
+        )
+
+        spec.inputs.validator = cls.validate_inputs
         spec.output_namespace("training", dynamic=True, help="Training outputs")
         spec.output(
             "global_splitted",
@@ -169,9 +196,25 @@ class TrainingWorkChain(WorkChain):
         )
         spec.outline(cls.run_training, cls.finalize)
 
+    @classmethod
+    def validate_inputs(cls, inputs, _):
+        """Validate the inputs based on the selected engine."""
+        engine = inputs["engine"].value
+        if engine == "MACE" and "mace" not in inputs:
+            return "Missing required `mace` inputs for engine='MACE'."
+        if engine == "META" and "meta" not in inputs:
+            return "Missing required `meta` inputs for engine='META'."
+        return None
+
+    @classmethod
+    def validate_engine(cls, value, _):
+        """Validate the engine input."""
+        if value.value not in cls.ACCEPTED_ENGINES:
+            return f"The `engine` input can only be {', '.join(cls.ACCEPTED_ENGINES)}."
+
     def run_training(self):
-        """Run MACEWorkChain for each structure."""
-        split_datasets = SplitDataset(self.inputs.dataset)
+        """Run training."""
+        split_datasets = SplitDataset(self.inputs.dataset, self.inputs.non_training_fraction)
         train_set = split_datasets["train_set"]
         validation_set = split_datasets["validation_set"]
         test_set = split_datasets["test_set"]
@@ -182,34 +225,66 @@ class TrainingWorkChain(WorkChain):
         self.report(f"Validation set size: {len(validation_set.get_list())}")
         self.report(f"Test set size: {len(test_set.get_list())}")
 
-        inputs = self.exposed_inputs(MaceWorkChain, namespace="mace")
+        if self.inputs.engine.value == "MACE":
+            inputs = self.exposed_inputs(MaceWorkChain, namespace="mace")
 
-        inputs.train["training_set"] = train_set
-        inputs.train["validation_set"] = validation_set
-        inputs.train["test_set"] = test_set
+            inputs.train["training_set"] = train_set
+            inputs.train["validation_set"] = validation_set
+            inputs.train["test_set"] = test_set
 
-        if "checkpoints" in self.inputs:
-            inputs["checkpoints"] = self.inputs.checkpoints
-            inputs.train["restart"] = Bool(True)
+            if "checkpoints" in self.inputs:
+                inputs["checkpoints"] = self.inputs.checkpoints
+                inputs.train["restart"] = Bool(True)
 
-        if "checkpoints" in inputs:
-            chkpts = list(dict(inputs.checkpoints).values())
+            if "checkpoints" in inputs:
+                chkpts = list(dict(inputs.checkpoints).values())
 
-        for ii in range(self.inputs.num_potentials.value):
-            if "checkpoints" in self.inputs and ii < len(chkpts):
-                inputs.train["checkpoints"] = chkpts[ii]
+            for ii in range(self.inputs.num_potentials.value):
+                if "checkpoints" in self.inputs and ii < len(chkpts):
+                    inputs.train["checkpoints"] = chkpts[ii]
 
-            inputs.train["index_pot"] = Int(ii)
-            future = self.submit(MaceWorkChain, **inputs)
-            self.to_context(mace_wc=append_(future))
-        pass
+                inputs.train["index_pot"] = Int(ii)
+                future = self.submit(MaceWorkChain, **inputs)
+                self.to_context(mace_wc=append_(future))
+            pass
+
+        if self.inputs.engine.value == "META":
+            inputs = self.exposed_inputs(MetaWorkChain, namespace="meta")
+
+            inputs.train["training_set"] = train_set
+            inputs.train["validation_set"] = validation_set
+            inputs.train["test_set"] = test_set
+
+            if "checkpoints" in self.inputs:
+                inputs["checkpoints"] = self.inputs.checkpoints
+                inputs.train["restart"] = Bool(True)
+
+            if "checkpoints" in inputs:
+                chkpts = list(dict(inputs.checkpoints).values())
+
+            for ii in range(self.inputs.num_potentials.value):
+                if "checkpoints" in self.inputs and ii < len(chkpts):
+                    inputs.train["checkpoints"] = chkpts[ii]
+
+                inputs.train["index_pot"] = Int(ii)
+                future = self.submit(MetaWorkChain, **inputs)
+                self.to_context(meta_wc=append_(future))
+            pass
 
     def finalize(self):
-        """Collect and output results from all MACEWorkChain instances."""
+        """Collect and output results from all WorkChain instances."""
         results = {}
-        for ii, calc in enumerate(self.ctx.mace_wc):
-            results[f"mace_{ii}"] = {}
-            for el in calc.outputs:
-                results[f"mace_{ii}"][el] = calc.outputs[el]
 
-            self.out("training", results)
+        if self.inputs.engine.value == "MACE":
+            for ii, calc in enumerate(self.ctx.mace_wc):
+                results[f"mace_{ii}"] = {}
+                for el in calc.outputs:
+                    results[f"mace_{ii}"][el] = calc.outputs[el]
+
+        if self.inputs.engine.value == "META":
+            for ii, calc in enumerate(self.ctx.meta_wc):
+                results[f"meta_{ii}"] = {}
+                for el in calc.outputs:
+                    results[f"meta_{ii}"][el] = calc.outputs[el]
+
+        self.out("training", results)
