@@ -203,6 +203,7 @@ class AbInitioLabellingWorkChain(WorkChain):
                 
                 # Use the builder to generate magnetization input parameters
                 # Provide pseudos and dummy cutoffs to avoid looking for a default pseudo family that might not be installed
+                # @TODO find a cleaner way to implement this that doesn't rely on aiida-quantumespresso 
                 overrides = {
                     "pw": {
                         "pseudos": {kind.name: inputs.pw.pseudos[kind.symbol] for kind in str_data.kinds},
@@ -276,6 +277,8 @@ class AbInitioLabellingWorkChain(WorkChain):
             # Submit a constrained magnetization work chain
             if self.inputs.lambda_series:
                 constrained_inputs = AttributeDict()
+                if "clean_workdir" in inputs:
+                    constrained_inputs.clean_workdir = inputs.pop('clean_workdir')
                 constrained_inputs.quantumespresso = inputs
                 constrained_inputs.lambda_series = self.inputs.lambda_series
                 constrained_inputs.constrained_kinds = self.inputs.constrained_kinds
@@ -304,7 +307,7 @@ class AbInitioLabellingWorkChain(WorkChain):
             # From a PwConstrainedWorkChain or other workchain that calls multiple PwBaseWorkChains
             if 'converged_workchains' in calc.outputs:  
                 for label, calc_outputs in calc.outputs.converged_workchains.items():
-                    ab_initio_labelling_data[f"abinitiolabelling_{ii}_{label}"] = {i
+                    ab_initio_labelling_data[f"abinitiolabelling_{ii}_{label}"] = {
                         "output_parameters": calc_outputs.output_parameters,
                         "output_trajectory": calc_outputs.output_trajectory,
                     }
