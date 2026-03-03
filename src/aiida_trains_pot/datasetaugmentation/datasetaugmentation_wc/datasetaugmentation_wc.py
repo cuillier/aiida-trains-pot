@@ -413,7 +413,6 @@ def ReplicateStructures(min_dist, max_atoms, vacuum, input_structures):
 
 
 @calcfunction
-<<<<<<< HEAD
 def MagneticGenerator(
     n_configs, 
     max_frac_perturbed, 
