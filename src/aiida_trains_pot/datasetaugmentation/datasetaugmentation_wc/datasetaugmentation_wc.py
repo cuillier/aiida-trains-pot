@@ -769,6 +769,7 @@ class DatasetAugmentationWorkChain(WorkChain):
             default=lambda: cls.DEFAULT_do_magnetic,
             required=False,
             help=f"Add structures with perturbed starting magnetizations. Default: {cls.DEFAULT_do_magnetic}",
+        )
         spec.input(
             "do_alloys",
             valid_type=Bool,
@@ -941,7 +942,7 @@ class DatasetAugmentationWorkChain(WorkChain):
             required=False,
             help="Whether to only generate collinear magnetic moments aligned along the z-axis. "
             f"Default: {cls.DEFAULT_magnetic_collinear}",
-        
+        )
         spec.input(
             "alloys.fixed_species",
             valid_type=List,
