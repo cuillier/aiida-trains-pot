@@ -24,7 +24,7 @@ def SplitDataset(
     """Split dataset preserving groups with stochastic rounding."""
     data = dataset.get_list()
 
-    if not (0.0 < non_training_fraction.value < 1.0):
+    if not (0.0 <= non_training_fraction.value <= 1.0):
         raise ValueError("non_training_fraction must be between 0 and 1")
 
     train_p = 1.0 - non_training_fraction.value
@@ -43,11 +43,17 @@ def SplitDataset(
         "sigma_strain",
     ]
 
+
     def check_exclude(key):
         return not any(el in key for el in exclude_list)
 
     def get_grouping_key(d):
-        return tuple((k, v) for k, v in d.items() if check_exclude(k))
+        #return tuple((k, v) for k, v in d.items() if check_exclude(k))
+        include_list = [
+            "gen_method",
+            "set",
+        ]
+        return tuple(d.get(key, "UNKNOWN") for key in include_list)
 
     sorted_data = sorted(data, key=get_grouping_key)
     grouped_data = itertools.groupby(sorted_data, key=get_grouping_key)
