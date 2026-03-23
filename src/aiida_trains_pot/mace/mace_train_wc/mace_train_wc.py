@@ -63,20 +63,21 @@ class MaceTrainWorkChain(BaseRestartWorkChain):
 
         :param calculation: node from the previous calculation
         """
-        files_retrieved = calculation.outputs.retrieved.list_object_names()
-        for file in files_retrieved:
-            output_filename = file
-            if "checkpoint" in output_filename:
-                folder_data = FolderData()
-                folder_contents = calculation.outputs.retrieved.list_object_names(output_filename)
-                for file_in_folder in folder_contents:
-                    file_path = os.path.join(output_filename, file_in_folder)
-                    with calculation.outputs.retrieved.open(file_path, "rb") as handle:
-                        folder_data.put_object_from_filelike(handle, file_in_folder)
-                self.ctx.inputs.checkpoints_restart = folder_data
-
         if "checkpoints" in calculation.outputs:
-            self.ctx.inputs.checkpoints_restart = calculation.outputs.checkpoints
+            self.ctx.inputs.checkpoints = calculation.outputs.checkpoints
+        else:
+            files_retrieved = calculation.outputs.retrieved.list_object_names()
+            for file in files_retrieved:
+                output_filename = file
+                if "checkpoint" in output_filename:
+                    folder_data = FolderData()
+                    folder_contents = calculation.outputs.retrieved.list_object_names(output_filename)
+                    for file_in_folder in folder_contents:
+                        file_path = os.path.join(output_filename, file_in_folder)
+                        with calculation.outputs.retrieved.open(file_path, "rb") as handle:
+                            folder_data.put_object_from_filelike(handle, file_in_folder)
+                    self.ctx.inputs.checkpoints = folder_data
+
 
     def setup(self):
         """Call the ``setup`` of the ``BaseRestartWorkChain`` and create the inputs dictionary in ``self.ctx.inputs``.

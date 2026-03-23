@@ -49,11 +49,11 @@ def SplitDataset(
 
     def get_grouping_key(d):
         #return tuple((k, v) for k, v in d.items() if check_exclude(k))
-        include_list = [
-            "gen_method",
-            "set",
-        ]
-        return tuple(d.get(key, "UNKNOWN") for key in include_list)
+        return (
+            len(d["positions"]) == 1,
+            d.get("gen_method", "UNKNOWN"),
+            d.get("set",        "UNKNOWN"),
+        )
 
     sorted_data = sorted(data, key=get_grouping_key)
     grouped_data = itertools.groupby(sorted_data, key=get_grouping_key)
@@ -66,11 +66,11 @@ def SplitDataset(
         group_list = list(group)
 
         # ---- Forced assignment ----
+        if len(group_list[0]["positions"]) == 1:
+            training_set += group_list
+            continue
         if "gen_method" in group_list[0]:
-            if (
-                group_list[0]["gen_method"] in ["INPUT_STRUCTURE", "ISOLATED_ATOM", "EQUILIBRIUM"]
-                or len(group_list[0]["positions"]) == 1
-            ):
+            if group_list[0]["gen_method"] in ["INPUT_STRUCTURE", "EQUILIBRIUM"]:
                 training_set += group_list
                 continue
         if "set" in group_list[0]:

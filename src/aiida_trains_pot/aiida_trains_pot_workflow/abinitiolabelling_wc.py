@@ -11,6 +11,7 @@ from aiida_quantumespresso.common.types import SpinType
 from aiida_quantumespresso.calculations.functions.create_magnetic_configuration import create_magnetic_configuration
 
 import copy
+import re
 import warnings
 import numpy as np
 
@@ -36,11 +37,20 @@ def WriteLabelledDataset(non_labelled_structures, **labelled_data):
         
         config_index = int(key.split("_")[1])
         labelled_structure = copy.deepcopy(non_labelled_structures.get_list()[config_index])
+        
+        # Override per-atom information, because the order of atomic species in the output trajectory does
+        #   not necessarily match the order in the unlabelled input structure.
+        
+        kinds = value["output_trajectory"].get_array("atomic_species_name")
+        labelled_structure["symbols"] = [re.sub(r'\d', '', kind) for kind in kinds]
+        
+        # @TODO labelled_structure["numbers"]  # not present in output_trajectory
+        
+        labelled_structure["positions"] = list(value["output_trajectory"].get_array("positions")[-1])
 
         labelled_structure["dft_energy"] = float(value["output_parameters"].dict.energy)
-        labelled_structure["dft_forces"] = value["output_trajectory"].get_array("forces")[0].tolist()
-        stress = value["output_trajectory"].get_array("stress")[0] * gpa_to_eV_per_ang3
-        labelled_structure["dft_stress"] = stress.tolist()
+        labelled_structure["dft_forces"] = list(value["output_trajectory"].get_array("forces")[-1])
+        labelled_structure["dft_stress"] = list(value["output_trajectory"].get_array("stress")[-1] * gpa_to_eV_per_ang3)
 
         # Read magnetic moments into an (N, 3) array, regardless of the nspin setting
         N_atoms = int(value["output_parameters"].dict.number_of_atoms)
@@ -48,13 +58,13 @@ def WriteLabelledDataset(non_labelled_structures, **labelled_data):
             magmoms = np.zeros((N_atoms, 3))
         else:
             if value["output_parameters"].dict.number_of_spin_components == 2:  # Collinear
-                # Always mark as polarized along the z-axis
+                # Assume polarized along the z-axis
                 magnetization_directions = np.zeros((N_atoms, 3))
                 magnetization_directions[:,2] = 1.0     
                 magmoms = magnetization_directions * value["output_trajectory"].get_array("atomic_magnetic_moments")[-1,:,np.newaxis]
             elif value["output_parameters"].dict.number_of_spin_components == 4: # Non-collinear
                 # @TODO as of v5.0.0a1, aiida-quantumespresso does not parse the atomic_magnetic_moments for non-collinear calculations.
-                # It is reported (for only the final step) in the xml file, and on each step in the text output file. 
+                # They are reported for the final step in the xml file, and on each step in the text output file. 
                 raise NotImplementedError("Parsing non-collinear atomic magnetic moments is not implemented.")
         
         labelled_structure["dft_magmom"] = magmoms.tolist()

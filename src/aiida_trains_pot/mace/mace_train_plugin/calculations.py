@@ -325,34 +325,20 @@ class MaceTrainCalculation(CalcJob):
             checkpoints_folder = self.inputs.checkpoints
             folder.get_subfolder("checkpoints", create=True)  # Create the checkpoints directory
             for checkpoint_file in checkpoints_folder.list_object_names():
-                if "_epoch" in checkpoint_file and "_swa":
-                    with checkpoints_folder.open(checkpoint_file, "rb") as source:
-                        new_checkpoint_file = f"aiida_run-{str(mace_config_dict['seed'])}_epoch-0_swa.pt"
-                        with folder.open(f"checkpoints/{new_checkpoint_file}", "wb") as destination:
-                            destination.write(source.read())
-                elif "_epoch" in checkpoint_file:
-                    with checkpoints_folder.open(checkpoint_file, "rb") as source:
-                        new_checkpoint_file = f"aiida_run-{str(mace_config_dict['seed'])}_epoch-0.pt"
-                        with folder.open(f"checkpoints/{new_checkpoint_file}", "wb") as destination:
-                            destination.write(source.read())
+                # Only need the .pt checkpoint files.
+                if not checkpoint_file.endswith('.pt'):
+                    continue
 
-        if "checkpoints_restart" in self.inputs:
-            mace_config_dict["restart_latest"] = True
-            checkpoints_folder = self.inputs.checkpoints_restart
-            folder.get_subfolder("checkpoints", create=True)  # Create the checkpoints directory
-            for checkpoint_file in checkpoints_folder.list_object_names():
-                if "_epoch" in checkpoint_file and "_swa":
-                    # Regular expression to extract the seed (assumed to be numeric after the first '-')
-                    match = re.search(r"-(\d+)_", checkpoint_file)
-                    if match:
-                        mace_config_dict["seed"] = int(match.group(1))
-                    with checkpoints_folder.open(checkpoint_file, "rb") as source:
-                        with folder.open(f"checkpoints/{checkpoint_file}", "wb") as destination:
-                            destination.write(source.read())
-                elif "_epoch" in checkpoint_file:
-                    with checkpoints_folder.open(checkpoint_file, "rb") as source:
-                        with folder.open(f"checkpoints/{checkpoint_file}", "wb") as destination:
-                            destination.write(source.read())
+                # Re-use the same seed from the previous checkpoint.
+                # Seed is assumed to be numeric after the first '-'
+                match = re.search(r"-(\d+)_", checkpoint_file) 
+                if match:
+                    mace_config_dict["seed"] = int(match.group(1))
+                
+                # Copy checkpoints
+                with checkpoints_folder.open(checkpoint_file, "rb") as source:
+                    with folder.open(f"checkpoints/{checkpoint_file}", "wb") as destination:
+                        destination.write(source.read())
 
         with folder.open("config.yml", "w") as yaml_file:
             yaml.dump(mace_config_dict, yaml_file, default_flow_style=False)
