@@ -1,0 +1,72 @@
+name: "aiida"
+
+# Training data information 
+stress_key: "dft_stress" 
+energy_key: "dft_energy" 
+forces_key: "dft_forces"
+magmom_key: "dft_magmom"
+compute_forces:    True
+compute_stress:    True
+compute_magforces: False
+
+# Model parameters
+pair_repulsion:         True        # Include ZBL, use with Agnesi (https://github.com/ACEsuit/mace/issues/494)
+distance_transform:     "Agnesi"    # Agnesi radial basis, see https://doi.org/10.1063/5.0158783
+model:                  "MagneticSolidHarmonicsSpinOrbitCoupledWithOneBodyMultiSpeciesGinzburgSelfMagmomScaleShiftMACE"
+interaction_first:      "MagneticRealAgnosticSpinOrbitCoupledDensityInteractionBlock"
+interaction:            "MagneticRealAgnosticSpinOrbitCoupledDensityInteractionBlock"
+contraction_cls_first:  "SymmetricContraction"
+contraction_cls:        "SymmetricContraction"
+num_channels: 64           
+max_L: 0                    # Maximum order of hidden_irreps
+max_ell: 3                  # Maximum angular momentum of ACE descriptor spherical harmonics
+num_radial_basis: 10        # 
+num_interactions: 2         # Number of message passing layers
+r_max: 5.0                  # Cutoff radius (Angstroms) 
+correlation: 3              # Body order minus one   
+
+E0s: "{8: -444.21680278154, 27: -4181.9008930567, 38: -929.78351515145, 57: -951.06561752433}"
+
+# One-body parameters
+# You should pre-train these 
+train_one_body_contribution: False
+num_mag_radial_basis_one_body: 20        
+m_max:        
+-  6.0  # O
+-  6.0  # Co
+-  6.0  # Sr
+-  6.0  # La
+
+max_m_ell: 2                # Maximum angular momentum of solid harmonics
+num_mag_radial_basis: 6     # Number of magnetic radial basis functions 
+data_aug_magmom: True       # Use whenever the training data neglects spin-orbit coupling
+
+# Loss function
+loss: "universal"
+energy_weight:               1 
+forces_weight:              10
+stress_weight:               1
+stage_two_energy_weight:   100
+stage_two_forces_weight:    10
+stage_two_stress_weight:     1
+
+# Learning rate
+lr:             0.005
+stage_two_lr:   0.0005
+ema:            true
+ema_decay:      0.999
+amsgrad:        true
+clip_grad:      0.01
+
+# Batch size
+batch_size:       64        # Use the largest value that fits in GPU memory
+valid_batch_size: 64        
+eval_interval:    1          
+start_stage_two: 2000
+max_num_epochs:  4000           
+
+# Logging
+device: cuda 
+enable_cueq: True                
+default_dtype: "float64" 
+error_table: "PerAtomMAE" 
