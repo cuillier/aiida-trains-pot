@@ -1,30 +1,35 @@
-"""Equation of State WorkChain."""
+"""MetaTrain WorkChain to launch METAtrain training."""
 
 import os
 
 from aiida import load_profile
 from aiida.common.extendeddicts import AttributeDict
-from aiida.engine import BaseRestartWorkChain, ProcessHandlerReport, process_handler, while_
+from aiida.engine import (
+    BaseRestartWorkChain,
+    ProcessHandlerReport,
+    process_handler,
+    while_,
+)
 from aiida.orm import FolderData
 from aiida.plugins import CalculationFactory
 
 load_profile()
 
-MaceCalculation = CalculationFactory("trains_pot.macetrain")
+MetaCalculation = CalculationFactory("trains_pot.metatrain")
 
 
-class MaceTrainWorkChain(BaseRestartWorkChain):
-    """WorkChain to launch MACE training."""
+class MetaTrainWorkChain(BaseRestartWorkChain):
+    """WorkChain to launch METAtrain training."""
 
-    _process_class = MaceCalculation
+    _process_class = MetaCalculation
 
     @classmethod
     def define(cls, spec):
         """Specify inputs and outputs."""
         super().define(spec)
 
-        spec.expose_inputs(MaceCalculation, namespace="train", namespace_options={"validator": None})
-        spec.expose_outputs(MaceCalculation)
+        spec.expose_inputs(MetaCalculation, namespace="train", namespace_options={"validator": None})
+        spec.expose_outputs(MetaCalculation)
         spec.input_namespace(
             "checkpoints",
             valid_type=FolderData,
@@ -63,21 +68,20 @@ class MaceTrainWorkChain(BaseRestartWorkChain):
 
         :param calculation: node from the previous calculation
         """
-        if "checkpoints" in calculation.outputs:
-            self.ctx.inputs.checkpoints = calculation.outputs.checkpoints
-        else:
-            files_retrieved = calculation.outputs.retrieved.list_object_names()
-            for file in files_retrieved:
-                output_filename = file
-                if "checkpoint" in output_filename:
-                    folder_data = FolderData()
-                    folder_contents = calculation.outputs.retrieved.list_object_names(output_filename)
-                    for file_in_folder in folder_contents:
-                        file_path = os.path.join(output_filename, file_in_folder)
-                        with calculation.outputs.retrieved.open(file_path, "rb") as handle:
-                            folder_data.put_object_from_filelike(handle, file_in_folder)
-                    self.ctx.inputs.checkpoints = folder_data
+        files_retrieved = calculation.outputs.retrieved.list_object_names()
+        for file in files_retrieved:
+            output_filename = file
+            if "checkpoint" in output_filename:
+                folder_data = FolderData()
+                folder_contents = calculation.outputs.retrieved.list_object_names(output_filename)
+                for file_in_folder in folder_contents:
+                    file_path = os.path.join(output_filename, file_in_folder)
+                    with calculation.outputs.retrieved.open(file_path, "rb") as handle:
+                        folder_data.put_object_from_filelike(handle, file_in_folder)
+                self.ctx.inputs.checkpoints_restart = folder_data
 
+        if "checkpoints" in calculation.outputs:
+            self.ctx.inputs.checkpoints_restart = calculation.outputs.checkpoints
 
     def setup(self):
         """Call the ``setup`` of the ``BaseRestartWorkChain`` and create the inputs dictionary in ``self.ctx.inputs``.
@@ -89,12 +93,12 @@ class MaceTrainWorkChain(BaseRestartWorkChain):
         default namelists for the ``parameters`` are set to empty dictionaries if not specified.
         """
         super().setup()
-        self.ctx.inputs = AttributeDict(self.exposed_inputs(MaceCalculation, namespace="train"))
+        self.ctx.inputs = AttributeDict(self.exposed_inputs(MetaCalculation, namespace="train"))
 
     @process_handler(
         priority=610,
         exit_codes=[
-            MaceCalculation.exit_codes.ERROR_OUT_OF_WALLTIME,  # pylint: disable=no-member
+            MetaCalculation.exit_codes.ERROR_OUT_OF_WALLTIME,  # pylint: disable=no-member
         ],
     )
     def handle_out_of_walltime(self, calculation):

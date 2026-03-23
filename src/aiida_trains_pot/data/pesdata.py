@@ -240,11 +240,11 @@ class PESData(Data):
         save_data = []
         for atm in data:
             info = atm.info
+            
             if save_labels and (isinstance(atm.calc, dft_calc) or isinstance(atm.calc, single_calc)):
                 num_labelled_frames += 1
-
-                save_data.append(
-                    {
+                
+                data_to_save = { 
                         "cell": atm.cell,
                         "symbols": atm.get_chemical_symbols(),
                         "positions": atm.get_positions(),
@@ -252,7 +252,17 @@ class PESData(Data):
                         "dft_energy": atm.calc.results["energy"],
                         "dft_forces": atm.calc.results["forces"],
                     }
-                )
+                if "start_magmom" in atm.arrays.keys():
+                    data_to_save["start_magmom"] = atm.arrays["start_magmom"]
+                if "dft_magmom" in atm.arrays.keys():
+                    data_to_save["dft_magmom"] = atm.arrays["dft_magmom"]
+                else:
+                    # If we don't find magnetic moments in a labelled structure,
+                    #   assume it came from an unpolarized calculation 
+                    data_to_save["dft_magmom"] = np.zeros((len(atm),3))
+                
+                save_data.append(data_to_save)
+                
                 symb = symb.union(set(save_data[-1]["symbols"]))
                 for key, value in info.items():
                     if "energy" not in key:
@@ -264,14 +274,17 @@ class PESData(Data):
                     continue
             else:
                 num_unlabelled_frames += 1
-                save_data.append(
-                    {
+                data_to_save = {
                         "cell": atm.cell,
                         "symbols": atm.get_chemical_symbols(),
                         "positions": atm.get_positions(),
                         "pbc": atm.pbc,
                     }
-                )
+                if "start_magmom" in atm.arrays.keys():
+                    data_to_save["start_magmom"] = atm.arrays["start_magmom"]
+
+                save_data.append(data_to_save)
+                
                 symb = symb.union(set(save_data[-1]["symbols"]))
                 for key, value in info.items():
                     if "energy" not in key:
@@ -310,8 +323,12 @@ class PESData(Data):
         num_unlabelled_frames = 0
         symb = set()
         for item in data:
-            if "dft_forces" in item.keys() and "dft_energy" in item.keys():
+            if "dft_forces" in item and "dft_energy" in item:
                 num_labelled_frames += 1
+                if "dft_magmom" not in item:
+                    # If there are no magnetic moments in a labelled structure,
+                    #   assume it came from an unpolarized calculation
+                    item["dft_magmom"] = np.zeros((len(item["dft_forces"]),3))
             else:
                 num_unlabelled_frames += 1
             symb = symb.union(set(item["symbols"]))
@@ -331,6 +348,7 @@ class PESData(Data):
                 raise ValueError("Atomic symbols not found in the dataset.")
             if "positions" not in item:
                 raise ValueError("Atomic positions not found in the dataset.")
+            
             # Ensure that symbols are a list of strings
             item["symbols"] = [str(symbol) for symbol in item["symbols"]]
             save_data.append(
@@ -373,7 +391,7 @@ class PESData(Data):
             cell=config["cell"],
             pbc=config["pbc"],
         )
-
+        
         # Add calculator with DFT data if available
         if "dft_energy" in config and "dft_forces" in config:
             calc_kwargs = {
@@ -384,7 +402,13 @@ class PESData(Data):
                 calc_kwargs["stress"] = convert_stress(config["dft_stress"])
 
             atoms.set_calculator(SinglePointCalculator(atoms, **calc_kwargs))
-
+        
+        # Add magnetic moments
+        if "start_magmom" in config:
+            atoms.arrays["start_magmom"] = config["start_magmom"]        
+        if "dft_magmom" in config:
+            atoms.arrays["dft_magmom"] = config["dft_magmom"]
+        
         return atoms
 
     def get_ase_item(self, index):
@@ -487,12 +511,14 @@ class PESData(Data):
             "symbols",
             "positions",
             "pbc",
+            "start_magmom",
             "forces",
             "stress",
             "energy",
             "dft_forces",
             "dft_stress",
             "dft_energy",
+            "dft_magmom",
             "md_forces",
             "md_stress",
             "md_energy",
@@ -512,7 +538,7 @@ class PESData(Data):
             )
             atm.pbc = config["pbc"]
             atm.info = {}
-
+            
             if write_params:
                 for key in params:
                     atm.info[key] = config[key]
@@ -520,7 +546,7 @@ class PESData(Data):
             if len(atm.get_chemical_symbols()) == 1 and not atm.get_pbc().all():
                 atm.info["config_type"] = "IsolatedAtom"
 
-            if "dft_stress" in config:
+            if "dft_stress" in config.keys():
                 s = convert_stress(config["dft_stress"])
                 atm.info[f"{key_prefix}stress"] = (
                     f"{s[0][0]:.6f} {s[0][1]:.6f} {s[0][2]:.6f} "
@@ -530,10 +556,17 @@ class PESData(Data):
 
             if "dft_energy" in config:
                 atm.info[f"{key_prefix}energy"] = config["dft_energy"]
-
+            
             if "dft_forces" in config:
                 atm.set_calculator(SinglePointCalculator(atm, forces=config["dft_forces"]))
             print(atm.info.get("stress", None))
+            
+            # Write magnetic moments
+            if "start_magmom" in config:
+                atm.arrays["start_magmom"] = np.array(config["start_magmom"])
+            if "dft_magmom" in config:
+                atm.arrays["dft_magmom"] = np.array(config["dft_magmom"])
+
             with io.StringIO() as buf, redirect_stdout(buf):
                 write("-", atm, format="extxyz", write_results=True, write_info=True)
                 dataset_txt += buf.getvalue()

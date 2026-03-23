@@ -11,7 +11,6 @@ import numpy as np
 import torch
 
 from ase.io import read
-from mace.calculators import MACECalculator
 from prettytable import PrettyTable
 
 
@@ -149,6 +148,59 @@ def rmse_table(RMSE) -> PrettyTable:
                     ]
                 )
     return table
+
+
+def load_potentials(potential_files):
+    """Load potentials from files.
+
+    :param potential_files: List of potential file paths
+    :return: List of loaded calculator instances or None if loading failed
+    """
+    calculators = []
+
+    # --- Try loading as magnetic MACE potentials ---
+    try:
+        from mace.calculators.mace import MagneticMACECalculator
+        from mace.modules import MagneticSCFMACE
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        for potential_file in potential_files: 
+            model = torch.load(potential_file, map_location=device, weights_only=False)
+            scf_wrapper = MagneticSCFMACE(model, use_scf=False)
+            calc = MagneticMACECalculator(models=[scf_wrapper], magmom_key="start_magmom", device=device)
+            calculators.append(calc)
+        return calculators
+
+    except Exception as e:
+        logging.info(f"Failed to load magnetic MACE potentials: {e}")    
+
+    # --- Try loading as standard MACE potentials ---
+    try:
+        from mace.calculators import MACECalculator
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        calculators = [MACECalculator(pot, device=device) for pot in potential_files]
+        logging.info(f"Loaded {len(calculators)} MACE potentials using {device}.")
+        return calculators  # ✅ success, return here
+
+    except Exception as e:
+        logging.info(f"Failed to load MACE potentials: {e}")
+
+    # --- Try loading as METAtomic potentials ---
+    try:
+        from metatomic.torch.ase_calculator import MetatomicCalculator
+
+        calculators = [MetatomicCalculator(pot, extensions_directory="extensions/") for pot in potential_files]
+        logging.info(f"Loaded {len(calculators)} METAtomic potentials.")
+        return calculators  # ✅ success, return here
+
+    except Exception as e:
+        logging.error(f"Failed to load METAtomic potentials: {e}")
+
+    # --- If both failed ---
+    logging.error("❌ Unable to load any potential (MACE or METAtomic).")
+    return None
 
 
 def global_rmse(dataset):
@@ -312,12 +364,11 @@ def main(log_freq=100):  # noqa: PLR0912
     datasets = glob.glob("dataset*xyz")
 
     logging.info("Loading potentials...")
-    if torch.cuda.is_available():
-        calculators = [MACECalculator(potential_file, device="cuda") for potential_file in potential_files]
-    else:
-        calculators = [MACECalculator(potential_file, device="cpu") for potential_file in potential_files]
 
-    logging.info(f"Loaded {len(calculators)} potentials.\n")
+    calculators = load_potentials(potential_files)
+    if calculators is None:
+        logging.error("Failed to load any potentials. Aborting committee evaluation.")
+        return
 
     for jj, dataset in enumerate(datasets):
         dataset_name = dataset.replace(".xyz", "")
@@ -333,6 +384,18 @@ def main(log_freq=100):  # noqa: PLR0912
             evaluated_dataset[-1]["positions"] = np.array(atm.get_positions())
             evaluated_dataset[-1]["symbols"] = atm.get_chemical_symbols()
             evaluated_dataset[-1]["pbc"] = atm.get_pbc()
+
+            # Initialize and log magnetic moments
+            # Prioritize dft_magmom > start_magmom > zeros
+            if "dft_magmom" in atm.arrays.keys():
+                atm.arrays["start_magmom"] = np.array(atm.arrays["dft_magmom"])
+                evaluated_dataset[-1]["dft_magmom"] = atm.arrays["dft_magmom"] 
+            elif "start_magmom" in atm.arrays.keys():
+                pass # start_magmom already set
+            else:
+                atm.arrays["start_magmom"] = np.zeros((len(atm), 3))
+            evaluated_dataset[-1]["start_magmom"] = atm.arrays["start_magmom"]
+
             try:
                 evaluated_dataset[-1]["dft_energy"] = atm.get_potential_energy()
             except Exception:
@@ -352,8 +415,9 @@ def main(log_freq=100):  # noqa: PLR0912
 
             for calculator in calculators:
                 n_pot += 1
+                calculator.reset()  # Needed for MagneticMACE to avoid magmom caching problems
                 atm.calc = calculator
-
+                
                 energy.append(atm.get_potential_energy())
                 forces.append(np.array(atm.get_forces()))
                 stress.append(np.array(atm.get_stress(voigt=False)))
@@ -361,6 +425,11 @@ def main(log_freq=100):  # noqa: PLR0912
                 evaluated_dataset[-1][f"pot_{n_pot}_energy"] = atm.get_potential_energy()
                 evaluated_dataset[-1][f"pot_{n_pot}_forces"] = np.array(atm.get_forces())
                 evaluated_dataset[-1][f"pot_{n_pot}_stress"] = np.array(atm.get_stress(voigt=False))
+                
+                # MagneticMACE stores the evaluated magnetic moments in "dft_magmom"
+                if "dft_magmom" in atm.arrays.keys():
+                    evaluated_dataset[-1]["evaluated_magmom"] = np.array(atm.arrays["dft_magmom"])
+
                 if "dft_energy" in evaluated_dataset[-1]:
                     evaluated_dataset[-1][f"pot_{n_pot}_energy_rmse"] = calc_rmse(
                         [evaluated_dataset[-1]["dft_energy"]],
@@ -376,6 +445,7 @@ def main(log_freq=100):  # noqa: PLR0912
                         evaluated_dataset[-1]["dft_stress"],
                         np.array(atm.get_stress(voigt=False)).ravel(),
                     )
+ 
             evaluated_dataset[-1]["energy_deviation"] = maximum_deviation(np.array(energy))
             evaluated_dataset[-1]["forces_deviation"] = maximum_deviation(np.array(forces))
             evaluated_dataset[-1]["stress_deviation"] = maximum_deviation(np.array(stress))
@@ -388,7 +458,7 @@ def main(log_freq=100):  # noqa: PLR0912
                     f"Frames {ii+1:5d}/{len(atoms)} evaluated - time remaining for dataset {jj+1}:"
                     f"{((time_f-time_i)/(ii+1))*(len(atoms)-ii):.2f} s"
                 )
-
+       
         logging.info(f"Evaluation finished for dataset {jj+1}.")
         logging.info(f"Saving evaluated dataset {jj+1}...")
         np.savez(f"{dataset_name}_evaluated.npz", evaluated_dataset=evaluated_dataset)

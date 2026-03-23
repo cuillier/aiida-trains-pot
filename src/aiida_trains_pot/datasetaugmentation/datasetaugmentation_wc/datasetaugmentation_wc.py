@@ -2,6 +2,7 @@
 
 import math
 import random
+import time
 
 from random import randint, uniform
 
@@ -25,12 +26,14 @@ PESData = DataFactory("pesdata")
 
 def ase_to_dict(ase_structure):
     """Convert an ASE structure to a dictionary."""
-    return {
+    structure_dict = {
         "cell": ase_structure.get_cell().tolist(),
         "symbols": ase_structure.get_chemical_symbols(),
-        "positions": ase_structure.get_positions().tolist(),
         "pbc": ase_structure.get_pbc(),
     }
+    for key,array in ase_structure.arrays.items():
+        structure_dict[key] = list(array)
+    return structure_dict        
 
 
 def check_vacuum(structure, vacuum):
@@ -410,8 +413,102 @@ def ReplicateStructures(min_dist, max_atoms, vacuum, input_structures):
 
 
 @calcfunction
+def MagneticGenerator(
+    n_configs, 
+    max_frac_perturbed, 
+    selection_threshold, 
+    perturbation_magnitude, 
+    collinear, 
+    **input_datasets):
+    """Randomly perturb and rotate magnetic moments.
+
+    :param n_configs: Int with the number of configurations to generate per input structure
+    :param max_frac_perturbed: Float with the maximum fraction of atoms to perturb
+    :param selection_threshold: Float that sets the threshold moment "b" (in Bohr magnetons) for considering an atom with absolute magnetization "mu" to be magnetic. 
+                                The random selection probability is weighted by
+                                    max(1e-6, mu - b). 
+                                Setting this to a value above the maximum possible magnetization yields completely selection. 
+                                Setting this to some positive finite value will encourage augmentation of magnetic atoms with mu > b.
+    :param perturbation_magnitude: Float with the magnitude of the perturbations in Bohr magnetons
+    :param collinear: Bool to project magnetic moments onto the z-axis when True.
+    :param input_datasets: dict of generation_method: PESData structures to augment
+    """
+    structures = []
+    for _, input_structures in input_datasets.items():
+        for structure in input_structures.get_ase_list():
+            num_atoms = len(structure)
+            
+            if "start_magmom" in structure.arrays.keys():
+                input_magmom = np.array(structure.arrays["start_magmom"])
+            elif "dft_magmom" in structure.arrays.keys():
+                input_magmom = np.array(structure.arrays["dft_magmom"])
+            else:
+                input_magmom = np.zeros((num_atoms, 3))
+
+            absolute_moments = np.linalg.norm(input_magmom, axis=1)
+
+            # Weight random selection probabilities to favor magnetic atoms
+            excess_moments = absolute_moments - selection_threshold
+            selection_weights = np.where(excess_moments > 1e-6, excess_moments, 1e-6)
+            selection_probabilities = selection_weights / np.sum(selection_weights)
+
+            num_rattled = int(np.ceil(np.random.uniform() * max_frac_perturbed * num_atoms))
+            
+            for _ in range(int(n_configs)):
+                # Perturb the magnitude of the moments by +-1 Bohr magneton
+                perturbed_atoms = np.random.choice(
+                        num_atoms,
+                        size=num_rattled,
+                        replace=False,
+                        p=selection_probabilities.astype(float))
+                perturbations = np.random.choice(
+                        [-perturbation_magnitude, perturbation_magnitude],
+                        size=num_rattled,
+                        replace=True)
+
+                # Assign random moment directions
+                directions = np.random.uniform(
+                        low=-1.0, high=1.0,
+                        size=(num_rattled, 3))
+                if collinear:
+                    # Project onto z-axis
+                    unit_directions = np.where(directions > 0.0, 1.0, -1.0)
+                    unit_directions[:,[0,1]] = 0.0
+                else:
+                    unit_directions = directions / np.linalg.norm(directions, axis=1)
+                
+                # Create a new structure with the augmented starting magnetization
+                new_structure = structure.copy()
+                start_magmom = input_magmom.copy()
+                
+                start_magmom[perturbed_atoms,:] = (absolute_moments[perturbed_atoms] + perturbations)[:,np.newaxis] \
+                                                  * unit_directions
+                new_structure.arrays["start_magmom"] = start_magmom
+                structures.append(ase_to_dict(new_structure))
+                structures[-1]["gen_method"] = "MAGNETIC"
+
+    pes_dataset = PESData(structures)
+    return {"magnetic_structures": pes_dataset}
+
+def AlloysGenerator(fixed_species, alloy_species, num_structures, alloy_fractions=None, **input_datasets):
+    """Generate structures with random substitutions to create alloys."""
+    alloys = []
+    input_structures = []
+    for _, input_dataset in input_datasets.items():
+        input_structures += input_dataset.get_ase_list()
+    rng = np.random.default_rng(int(time.time()))
+    input_structures = [input_structures[0]]
+    while len(alloys) < num_structures:
+        sel = input_structures[rng.integers(len(input_structures))]
+        alloy = random_substitute_atoms(sel, fixed_species, alloy_species, alloy_fractions)
+        alloys.append(ase_to_dict(alloy))
+        alloys[-1]["gen_method"] = "ALLOY"
+    pes_dataset = PESData(alloys)
+    return {"substituted_structures": pes_dataset}
+
+@calcfunction
 def WriteDataset(**dataset_in):
-    """Combine all generated structures into a single PESData dataset."""
+    """Combine all generated datasets into a single PESData dataset."""
     dataset_out = []
     for _, dataset in dataset_in.items():
         dataset_out.extend(dataset)
@@ -469,6 +566,66 @@ def uniform_random_atomic_displacement(positions, min_distances, max_displacemen
     return positions
 
 
+def random_substitute_atoms(
+    atoms: Atoms,
+    fixed_species=None,
+    substitute_species=None,
+    fractions=None,
+) -> Atoms:
+    """Sostitutes randomly the species of the input `atoms`, keeping fixed those in `fixed_species`."""
+    if substitute_species is None or len(substitute_species) == 0:
+        return None
+
+    rng = np.random.default_rng(int(time.time()))
+    fixed_species = list(fixed_species) if fixed_species else []
+
+    syms = atoms.get_chemical_symbols()
+    replace_idx = [i for i, s in enumerate(syms) if s not in fixed_species]
+    R = len(replace_idx)
+    if R == 0:
+        return atoms.copy()
+
+    subs = list(substitute_species)
+    k = len(subs)
+
+    if fractions is None:
+        # Random fractions
+        p = rng.dirichlet(np.ones(k))
+    elif isinstance(fractions, dict):
+        p = np.array([float(fractions.get(sp, 0.0)) for sp in subs], dtype=float)
+        p /= p.sum()
+    else:
+        p = np.array(fractions, dtype=float)
+        if p.shape[0] != k:
+            return None
+        p /= p.sum()
+
+    raw = p * R
+    counts = np.floor(raw).astype(int)
+    rem = R - counts.sum()
+    if rem > 0:
+        order = np.argsort(-(raw - counts))  # descending fractional parts
+        for t in range(rem):
+            counts[order[t % k]] += 1
+
+    # pool e shuffle
+    pool = [sp for sp, c in zip(subs, counts, strict=False) for _ in range(int(c))]
+    if len(pool) < R:
+        pool += [subs[0]] * (R - len(pool))
+    elif len(pool) > R:
+        pool = pool[:R]
+    rng.shuffle(pool)
+
+    # apply
+    new_syms = syms[:]
+    for idx, sp in zip(replace_idx, pool, strict=False):
+        new_syms[idx] = sp
+
+    out = atoms.copy()
+    out.set_chemical_symbols(new_syms)
+    return out
+
+
 def atoms_substitution(structure, fraction_substitution):
     """Substitute atoms in the structure with random atoms from the same structure.
 
@@ -516,6 +673,12 @@ class DatasetAugmentationWorkChain(WorkChain):
     DEFAULT_vacuum = Float(15.0)
     DEFAULT_max_substitution_fraction = Float(0.2)
     DEFAULT_substitution_fraction = Float(0.2)
+    DEFAULT_magnetic_n_configs = Int(10)
+    DEFAULT_magnetic_max_frac_perturbed = Float(0.5)
+    DEFAULT_magnetic_selection_threshold = Float(100.0)
+    DEFAULT_magnetic_perturbation_magnitude = Float(1.0)
+    DEFAULT_magnetic_collinear = Bool(True)
+    DEFAULT_alloys_num_structures = Int(100)
 
     DEFAULT_do_rattle_strain_defects = Bool(True)
     DEFAULT_do_input = Bool(True)
@@ -525,6 +688,8 @@ class DatasetAugmentationWorkChain(WorkChain):
     DEFAULT_do_replicate = Bool(True)
     DEFAULT_do_check_vacuum = Bool(True)
     DEFAULT_do_substitution = Bool(True)
+    DEFAULT_do_magnetic = Bool(False)
+    DEFAULT_do_alloys = Bool(True)
     ######################################################
 
     @classmethod
@@ -559,7 +724,7 @@ class DatasetAugmentationWorkChain(WorkChain):
             valid_type=Bool,
             default=lambda: cls.DEFAULT_do_isolated,
             required=False,
-            help="Add isolated atoms configurations to the dataset. " f"Default: {cls.DEFAULT_do_isolated}",
+            help=f"Add isolated atoms configurations to the dataset. Default: {cls.DEFAULT_do_isolated}",
         )
         spec.input(
             "do_clusters",
@@ -598,6 +763,20 @@ class DatasetAugmentationWorkChain(WorkChain):
             required=False,
             help=f"Add substituted structures to the dataset. Default: {cls.DEFAULT_do_substitution}",
         )
+        spec.input(
+            "do_magnetic",
+            valid_type=Bool,
+            default=lambda: cls.DEFAULT_do_magnetic,
+            required=False,
+            help=f"Add structures with perturbed starting magnetizations. Default: {cls.DEFAULT_do_magnetic}",
+        )
+        spec.input(
+            "do_alloys",
+            valid_type=Bool,
+            default=lambda: cls.DEFAULT_do_alloys,
+            required=False,
+            help=f"Add alloy structures to the dataset. Default: {cls.DEFAULT_do_alloys}",
+        )
 
         spec.input(
             "rsd.params.rattle_fraction",
@@ -613,7 +792,7 @@ class DatasetAugmentationWorkChain(WorkChain):
             default=lambda: cls.DEFAULT_RSD_max_compressive_strain,
             required=False,
             help="Maximum compressive strain factor. Cell can be compressed up to this fraction "
-            "of cell parameters. Default: {cls.DEFAULT_RSD_max_compressive_strain}",
+            f"of cell parameters. Default: {cls.DEFAULT_RSD_max_compressive_strain}",
         )
         spec.input(
             "rsd.params.max_tensile_strain",
@@ -621,7 +800,7 @@ class DatasetAugmentationWorkChain(WorkChain):
             default=lambda: cls.DEFAULT_RSD_max_tensile_strain,
             required=False,
             help="Maximum tensile strain factor. Cell can be stretched up to this fraction of "
-            "cell parameters. Default: {cls.DEFAULT_RSD_max_tensile_strain}",
+            f"cell parameters. Default: {cls.DEFAULT_RSD_max_tensile_strain}",
         )
         spec.input(
             "rsd.params.n_configs",
@@ -723,19 +902,88 @@ class DatasetAugmentationWorkChain(WorkChain):
         )
 
         spec.input(
+            "magnetic.n_configs",
+            valid_type=(Int),
+            default=lambda: cls.DEFAULT_magnetic_n_configs,
+            required=False,
+            help="Number of magnetic configurations to generate per each input structure. "
+            f"Default: {cls.DEFAULT_magnetic_n_configs}",
+        )
+        spec.input(
+            "magnetic.max_frac_perturbed",
+            valid_type=(Int, Float),
+            default=lambda: cls.DEFAULT_magnetic_max_frac_perturbed,
+            required=False,
+            help="Fraction of atoms to have their starting magnetic moments perturbed. "
+            f"Default: {cls.DEFAULT_magnetic_max_frac_perturbed}",
+        )
+        spec.input(
+            "magnetic.selection_threshold",
+            valid_type=(Int, Float),
+            default=lambda: cls.DEFAULT_magnetic_selection_threshold,
+            required=False,
+            help="Atoms with magnetic moments above this threshold (in Bohr magnetons) have"
+            " a higher probability of being selected for perturbation. Values greater than"
+            " the Z-valence of the pseudopotential yield completely random selection. "
+            f"Default: {cls.DEFAULT_magnetic_selection_threshold}",
+        )
+        spec.input(
+            "magnetic.perturbation_magnitude",
+            valid_type=(Int, Float),
+            default=lambda: cls.DEFAULT_magnetic_perturbation_magnitude,
+            required=False,
+            help="Magnitude of the perturbation to apply to the magnetic moments, in Bohr magnetons."
+            f"Default: {cls.DEFAULT_magnetic_perturbation_magnitude}",
+        )
+        spec.input(
+            "magnetic.collinear",
+            valid_type=(Bool),
+            default=lambda: cls.DEFAULT_magnetic_collinear,
+            required=False,
+            help="Whether to only generate collinear magnetic moments aligned along the z-axis. "
+            f"Default: {cls.DEFAULT_magnetic_collinear}",
+        )
+        spec.input(
+            "alloys.fixed_species",
+            valid_type=List,
+            required=False,
+            help="List of species that will not be substituted in the alloy generation.",
+        )
+        spec.input(
+            "alloys.alloy_species",
+            valid_type=List,
+            required=False,
+            help="List of species to be used for alloy generation.",
+        )
+        spec.input(
+            "alloys.num_structures",
+            valid_type=Int,
+            default=lambda: cls.DEFAULT_alloys_num_structures,
+            required=False,
+            help=f"Number of alloy structures to generate. Default: {cls.DEFAULT_alloys_num_structures}",
+        )
+        spec.input(
+            "alloys.fractions",
+            valid_type=List,
+            required=False,
+            help="List of fractions for each alloy species. If not provided, random fractions will be used.",
+        )
+
+        spec.input(
             "vacuum",
             valid_type=(Int, Float),
             default=lambda: cls.DEFAULT_vacuum,
             required=False,
             help=f"Minimum vacuum along non periodic directions. Default: {cls.DEFAULT_vacuum}",
         )
+
         spec.output_namespace("structures", valid_type=PESData, dynamic=True, help="Augmented datasets.")
 
-        spec.outline(
-            cls.check_inputs,
-            if_(cls.do_replication)(cls.replicate),
-            cls.run_dataset_generation,
-        )
+        spec.inputs.validator = cls.validate_inputs
+
+        spec.inputs.validator = cls.validate_inputs
+
+        spec.outline(cls.setup, if_(cls.do_replication)(cls.replicate), cls.run_dataset_generation)
 
     @classmethod
     def get_builder_with_structures(cls, structures):
@@ -744,31 +992,54 @@ class DatasetAugmentationWorkChain(WorkChain):
         builder.structures = {f"s{ii}": s for ii, s in enumerate(structures)}
         return builder
 
-    def check_inputs(self):
+    @classmethod
+    def validate_inputs(cls, inputs, _):  # noqa: PLR0911
         """Check inputs."""
-        if self.inputs.do_rattle_strain_defects:
+        if inputs["do_rattle_strain_defects"]:
             # ERRORS
-            if self.inputs.rsd.params.rattle_fraction < 0.0 or self.inputs.rsd.params.rattle_fraction > 1.0:
-                raise ValueError("rattle_fraction must be between 0 and 1")
-            if self.inputs.rsd.params.max_tensile_strain < 0.0:
-                raise ValueError("max_tensile_strain must be greater than 0")
+            if inputs["rsd"]["params"]["rattle_fraction"] < 0.0 or inputs["rsd"]["params"]["rattle_fraction"] > 1.0:
+                return "rattle_fraction must be between 0 and 1"
+            if inputs["rsd"]["params"]["max_tensile_strain"] < 0.0:
+                return "max_tensile_strain must be greater than 0"
             if (
-                self.inputs.rsd.params.max_compressive_strain < 0.0
-                or self.inputs.rsd.params.max_compressive_strain > 1.0
+                inputs["rsd"]["params"]["max_compressive_strain"] < 0.0
+                or inputs["rsd"]["params"]["max_compressive_strain"] > 1.0
             ):
-                raise ValueError("max_compressive_strain must be between 0 and 1")
-            if self.inputs.rsd.params.n_configs < 1:
-                raise ValueError("n_configs must be at least 1")
-            if self.inputs.rsd.params.frac_vacancies < 0.0 or self.inputs.rsd.params.frac_vacancies > 1.0:
-                raise ValueError("frac_vacancies must be between 0 and 1")
-            if self.inputs.rsd.params.vacancies_per_config < 0:
-                raise ValueError("vacancies_per_config must be non-negative")
+                return "max_compressive_strain must be between 0 and 1"
+            if inputs["rsd"]["params"]["n_configs"] < 1:
+                return "n_configs must be at least 1"
+            if inputs["rsd"]["params"]["frac_vacancies"] < 0.0 or inputs["rsd"]["params"]["frac_vacancies"] > 1.0:
+                return "frac_vacancies must be between 0 and 1"
+            if inputs["rsd"]["params"]["vacancies_per_config"] < 0:
+                return "vacancies_per_config must be non-negative"
 
+        if inputs["do_alloys"]:
+            if "alloy_species" not in inputs["alloys"] or len(inputs["alloys"]["alloy_species"]) == 0:
+                return "alloy_species must be specified when do_alloys is True"
+            if inputs["alloys"]["num_structures"] < 1:
+                return "num_structures must be at least 1"
+
+    def setup(self):
+        """Setup workchain."""
         self.ctx.initial_dataset = self.inputs.structures
         if self.inputs.do_check_vacuum:
             self.ctx.vacuum = self.inputs.vacuum
         else:
             self.ctx.vacuum = Float(0)
+        if self.inputs.do_alloys:
+            self.ctx.alloys_fractions = []
+            if "fractions" in self.inputs.alloys:
+                self.ctx.alloys_fractions = self.inputs.alloys.fractions
+            self.ctx.alloys_fixed_species = []
+            if "fixed_species" in self.inputs.alloys:
+                self.ctx.alloys_fixed_species = self.inputs.alloys.fixed_species
+
+        if self.inputs.do_magnetic:
+            if self.inputs.magnetic.n_configs < 1:
+                raise ValueError("magnetic.n_configs must be at least 1")
+            if self.inputs.magnetic.max_frac_perturbed < 0.0 or self.inputs.magnetic.max_frac_perturbed > 1.0:
+                raise ValueError("magnetic.max_frac_perturbed must be between 0 and 1")
+
 
     def do_replication(self):  # noqa: D102
         return bool(self.inputs.do_replication)
@@ -834,5 +1105,34 @@ class DatasetAugmentationWorkChain(WorkChain):
                 self.inputs.substitution.structures_fraction,
                 **datasets_to_substitute,
             )["substituted_structures"]
+        if self.inputs.do_alloys:
+            datasets_for_alloys = {}
+            if self.inputs.do_input:
+                datasets_for_alloys["input_structures"] = dataset["input_structures"]
+            if self.inputs.do_rattle_strain_defects:
+                datasets_for_alloys["rattle_strain_defects_structures"] = dataset["rattle_strain_defects_structures"]
+            if self.inputs.do_slabs:
+                datasets_for_alloys["slabs"] = dataset["slabs"]
+            dataset["alloys"] = AlloysGenerator(
+                self.ctx.alloys_fixed_species,
+                self.inputs.alloys.alloy_species,
+                self.inputs.alloys.num_structures,
+                self.ctx.alloys_fractions,
+                **datasets_for_alloys,
+            )["alloy_structures"]
+        if self.inputs.do_magnetic:
+            datasets_to_augment = {
+                gen_method: structures \
+                for gen_method,structures in dataset.items() \
+                if gen_method in ["input_structures", "rattle_strain_defects_structures", "slabs", "alloy_structures"]
+            }
+            dataset["magnetic"] = MagneticGenerator(
+                self.inputs.magnetic.n_configs,
+                self.inputs.magnetic.max_frac_perturbed,
+                self.inputs.magnetic.selection_threshold,
+                self.inputs.magnetic.perturbation_magnitude,
+                self.inputs.magnetic.collinear,
+                **datasets_to_augment,
+            )["magnetic_structures"]    
         dataset["global_structures"] = WriteDataset(**dataset)["global_structures"]
         self.out("structures", dataset)
