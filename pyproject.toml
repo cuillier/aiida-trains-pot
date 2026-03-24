@@ -30,33 +30,31 @@ dependencies = [
 ]
 
 [project.urls]
-Source = "https://github.com/aiida-trieste-developers/aiida-trains-pot"
-
-
+Source = "https://github.com/cuillier/aiida-trains-pot"
 
 [project.entry-points.'aiida.workflows']
-"trains_pot.datasetaugmentation"   = "aiida_trains_pot.datasetaugmentation.datasetaugmentation_wc.datasetaugmentation_wc:DatasetAugmentationWorkChain"
-"trains_pot.macetrain"        = "aiida_trains_pot.mace.mace_train_wc.mace_train_wc:MaceTrainWorkChain"
-"trains_pot.metatrain"        = "aiida_trains_pot.meta.meta_train_wc.meta_train_wc:MetaTrainWorkChain"
-"trains_pot.labelling"        = "aiida_trains_pot.aiida_trains_pot_workflow.abinitiolabelling_wc:AbInitioLabellingWorkChain"
-"trains_pot.training"         = "aiida_trains_pot.aiida_trains_pot_workflow.training_wc:TrainingWorkChain"
-"trains_pot.exploration"      = "aiida_trains_pot.aiida_trains_pot_workflow.exploration_wc:ExplorationWorkChain"
-"trains_pot.lammpsmd"         = "aiida_trains_pot.lammps.lammps_wc.lammps_wc:LammpsWorkChain"
-"trains_pot.workflow"         = "aiida_trains_pot.aiida_trains_pot_workflow.aiida_trains_pot_workflow:TrainsPotWorkChain"
-"trains_pot.constrained"      = "aiida_trains_pot.abinitiolabelling.quantumespresso.constrained:PwConstrainedWorkChain"
+"trains_pot.datasetaugmentation"   = "aiida_trains_pot.workflows.datasetaugmentation:DatasetAugmentationWorkChain"
+"trains_pot.macetrain"        = "aiida_trains_pot.workflows.mace_train:MaceTrainWorkChain"
+"trains_pot.metatrain"        = "aiida_trains_pot.workflows.meta_train:MetaTrainWorkChain"
+"trains_pot.labelling"        = "aiida_trains_pot.workflows.abinitiolabelling:AbInitioLabellingWorkChain"
+"trains_pot.training"         = "aiida_trains_pot.workflows.training:TrainingWorkChain"
+"trains_pot.exploration"      = "aiida_trains_pot.workflows.exploration:ExplorationWorkChain"
+"trains_pot.workflow"         = "aiida_trains_pot.workflows.aiida_trains_pot:TrainsPotWorkChain"
+"trains_pot.constrained"      = "aiida_trains_pot.workflows.pwconstrained:PwConstrainedWorkChain"
+#"trains_pot.lammpsmd"         = "aiida_trains_pot.workflows.lammpsmd_exploration:LammpsMDExplorationWorkChain"
 
 
 [project.entry-points.'aiida.calculations']
-"trains_pot.macetrain"        = "aiida_trains_pot.mace.mace_train_plugin.calculations:MaceTrainCalculation"
-"trains_pot.metatrain"        = "aiida_trains_pot.meta.meta_train_plugin.calculations:MetaTrainCalculation"
-"trains_pot.lammpsmd"         = "aiida_trains_pot.lammps.lammps_plugin.calculations:LammpsBaseCalculation"
-"trains_pot.evaluation"       = "aiida_trains_pot.evaluation.calculations:EvaluationCalculation"
+"trains_pot.macetrain"        = "aiida_trains_pot.calculations.mace_train:MaceTrainCalculation"
+"trains_pot.metatrain"        = "aiida_trains_pot.calculations.meta_train:MetaTrainCalculation"
+"trains_pot.evaluation"       = "aiida_trains_pot.calculations.evaluation:EvaluationCalculation"
+#"trains_pot.lammpsmd"         = "aiida_trains_pot.lammps.lammps_plugin.calculations:LammpsBaseCalculation"
 
 [project.entry-points.'aiida.parsers']
-"trains_pot.macetrain"        = "aiida_trains_pot.mace.mace_train_plugin.parsers:MaceBaseParser"
-"trains_pot.metatrain"        = "aiida_trains_pot.meta.meta_train_plugin.parsers:MetaBaseParser"
-"trains_pot.lammpsmd"         = "aiida_trains_pot.lammps.lammps_plugin.parsers:LammpsBaseParser"
-"trains_pot.evaluation"       = "aiida_trains_pot.evaluation.parsers:EvaluationParser"
+"trains_pot.macetrain"        = "aiida_trains_pot.parsers.mace_train:MaceBaseParser"
+"trains_pot.metatrain"        = "aiida_trains_pot.parsers.meta_train:MetaBaseParser"
+"trains_pot.evaluation"       = "aiida_trains_pot.parsers.evaluation:EvaluationParser"
+#"trains_pot.lammpsmd"         = "aiida_trains_pot.lammps.lammps_plugin.parsers:LammpsBaseParser"
 
 [project.entry-points."aiida.data"]
 "pesdata"                 = "aiida_trains_pot.data.pesdata:PESData"
