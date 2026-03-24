@@ -12,10 +12,10 @@ from aiida_lammps.data.potential import LammpsPotentialData
 from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 
 from aiida_trains_pot.utils.lammps_pair_coeffs import get_dftd2_pair_coeffs, get_mace_pair_coeff, get_meta_pair_coeff
+from aiida_trains_pot.utils.generate_config import generate_lammps_md_config
 
 LammpsWorkChain = WorkflowFactory("lammps.base")
 PESData = DataFactory("pesdata")
-
 
 @calcfunction
 def LammpsFrameExtraction(
@@ -155,6 +155,15 @@ DEFAULT_parameters = Dict(
         "dump": {},
     }
 )
+DEFAULT_params_list = List(
+    generate_lammps_md_config(
+        temperatures = [0.0],
+        pressures    = [0.0],
+        steps        = [1000],
+        styles       = ['nve'],
+        dt           = 0.001,
+    )
+)
 ###################################################################
 
 
@@ -172,13 +181,17 @@ class LammpsMDWorkChain(WorkChain):
         )
         spec.input(
             "params_list", 
-            valid_type=List, 
-            help="List of ensemble parameters (temperature, pressure, etc.) for MD"
+            valid_type=List,
+            default=lambda: DEFAULT_params_list,
+            help="List of ensemble parameters (temperature, pressure, etc.) for MD",
+            required=False,
         )
         spec.input(
             "parameters",  
             valid_type=Dict, 
-            help="Global parameters for LAMMPS"
+            default=lambda: DEFAULT_parameters,
+            help="Global parameters for LAMMPS",
+            required=False,
         )
         spec.input(
             "potential_lammps",

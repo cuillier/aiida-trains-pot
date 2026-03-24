@@ -2,11 +2,11 @@
 
 
 def generate_lammps_md_config(
-    temperatures = [0],
-    pressures = [0],
-    steps = [0],
-    styles = ['nve'],
-    dt=0.001,
+    temperatures: list[float],
+    pressures:    list[float],
+    steps:        list[int],
+    styles:       list[str],
+    dt:           float,
 ):
     """Generate a YAML-like configuration for a set of parameters.
 
@@ -24,6 +24,7 @@ def generate_lammps_md_config(
             if it is too large, the pressure will take a very long time to equilibrate.
             A good choice for many models is a Pdamp of around 1000 timesteps.
         styles (list): A list of integration styles (e.g., "npt", "nvt", ...).
+        dt (float): Timestep for setting thermostat/barostat time constants
 
     Returns:
         str: A YAML-formatted string of the configuration.
