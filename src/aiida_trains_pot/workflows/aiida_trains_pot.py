@@ -16,14 +16,12 @@ from aiida_trains_pot.utils.tools import enlarge_vacuum, error_calibration
 
 load_profile()
 
-# LammpsCalculation = CalculationFactory('lammps_base')
 DatasetAugmentationWorkChain = WorkflowFactory("trains_pot.datasetaugmentation")
 TrainingWorkChain = WorkflowFactory("trains_pot.training")
 AbInitioLabellingWorkChain = WorkflowFactory("trains_pot.labelling")
 ExplorationWorkChain = WorkflowFactory("trains_pot.exploration")
 EvaluationCalculation = CalculationFactory("trains_pot.evaluation")
 PESData = DataFactory("pesdata")
-
 PwBaseWorkChain = WorkflowFactory("quantumespresso.pw.base")
 
 ALLOWED_ENGINES = ["MACE", "META"]
@@ -40,67 +38,6 @@ def SaveRMSE(rmse):
     rmse_serializable = [item.get_dict() if isinstance(item, Dict) else item for item in rmse]
 
     return List(list=rmse_serializable)
-
-
-@calcfunction
-def LammpsFrameExtraction(
-    sampling_time,
-    saving_frequency,
-    thermalization_time=lambda: Float(0),
-    check_vacuum=lambda: Bool(False),
-    min_vacuum=lambda: Float(5.0),  # noqa B008
-    target_vacuum=lambda: Float(15.0),  # noqa B008
-    **trajectories,
-):
-    """Extract frames from trajectory."""
-    extracted_frames = []
-    for _, trajectory in trajectories.items():
-        try:
-            calculation = next(
-                calc.node
-                for calc in trajectory.base.links.get_incoming().all()
-                if calc.node.process_type == "aiida.calculations:lammps.base"
-            )
-        except StopIteration:
-            # in principle should not happen, but in case skip this trajectory
-            continue
-        params = calculation.inputs.parameters
-        input_structure = calculation.inputs.structure
-
-        timestep = params["control"]["timestep"]
-        integration_style = params["md"]["integration"]["style"].lower()
-        temperature = params["md"]["integration"]["constraints"]["temp"]
-
-        i = int(thermalization_time.value / timestep / saving_frequency.value) if thermalization_time.value > 0 else 1
-
-        while i < trajectory.number_steps:
-            frame = trajectory.get_step_structure(i).get_ase()
-            if check_vacuum:
-                frame = enlarge_vacuum(
-                    frame,
-                    min_vacuum=min_vacuum.value,
-                    target_vacuum=target_vacuum.value,
-                )
-
-            extracted_frames.append(
-                {
-                    "cell": frame.get_cell(),
-                    "symbols": frame.get_chemical_symbols(),
-                    "positions": frame.get_positions(),
-                    "input_structure_uuid": str(input_structure.uuid),
-                    "gen_method": "LAMMPS",
-                    "pbc": frame.get_pbc(),
-                }
-            )
-            extracted_frames[-1]["style"] = integration_style
-            extracted_frames[-1]["temp"] = temperature
-            extracted_frames[-1]["timestep"] = timestep
-            extracted_frames[-1]["id_lammps"] = calculation.uuid
-
-            i = i + int(sampling_time.value / timestep / saving_frequency.value)
-
-    pes_extracted_frames = PESData(extracted_frames)
-    return {"explored_dataset": pes_extracted_frames}
 
 
 @calcfunction
@@ -432,16 +369,27 @@ class TrainsPotWorkChain(WorkChain):
 
         spec.outline(
             cls.initialization,
-            if_(cls.do_dataset_augmentation)(cls.dataset_augmentation, cls.finalize_dataset_augmentation),
+            if_(cls.do_dataset_augmentation)(
+                cls.dataset_augmentation, 
+                cls.finalize_dataset_augmentation
+            ),
             while_(cls.check_iteration)(
-                if_(cls.do_ab_initio_labelling)(cls.ab_initio_labelling, cls.finalize_ab_initio_labelling),
-                if_(cls.do_training)(cls.training, cls.finalize_training),
+                if_(cls.do_ab_initio_labelling)(
+                    cls.ab_initio_labelling, 
+                    cls.finalize_ab_initio_labelling
+                ),
+                if_(cls.do_training)(
+                    cls.training, 
+                    cls.finalize_training
+                ),
                 if_(cls.do_exploration)(
                     cls.exploration,
                     cls.finalize_exploration,
-                    cls.exploration_frame_extraction,
                 ),
-                if_(cls.do_evaluation)(cls.run_committee_evaluation, cls.finalize_committee_evaluation),
+                if_(cls.do_evaluation)(
+                    cls.run_committee_evaluation, 
+                    cls.finalize_committee_evaluation
+                ),
             ),
             cls.finalize,
         )
@@ -752,28 +700,6 @@ class TrainsPotWorkChain(WorkChain):
             self.report(f"Launched ExplorationWorkChain with dataset_list <{future.pk}>")
             self.to_context(exploration=future)
 
-    def exploration_frame_extraction(self):
-        """Run exploration frame extraction."""
-        if self.inputs.bypass_exploration:
-            explored_dataset = self.ctx.lammps_input_structures
-        else:
-            parameters = AttributeDict(self.inputs.exploration.parameters)
-            dump_rate = int(self.inputs.frame_extraction.sampling_time / parameters.control.timestep)
-            explored_dataset = LammpsFrameExtraction(
-                self.inputs.frame_extraction.sampling_time,
-                dump_rate,
-                thermalization_time=self.inputs.frame_extraction.thermalization_time,
-                check_vacuum=self.inputs.check_vacuum,
-                min_vacuum=self.inputs.vacuum.min_vacuum,
-                target_vacuum=self.inputs.vacuum.target_vacuum,
-                **self.ctx.trajectories,
-            )["explored_dataset"]
-        
-        if len(explored_dataset) == 0:
-            self.finalize()
-            return self.exit_codes.EMPTY_EXPLORATION_DATASET
-        
-        self.ctx.explored_dataset = explored_dataset
 
     def run_committee_evaluation(self):
         """Run committee evaluation."""
@@ -849,6 +775,10 @@ class TrainsPotWorkChain(WorkChain):
                 for key, value in calc.items():
                     if key == "trajectories":
                         self.ctx.trajectories[f"exploration_{ii}"] = value
+        
+        if len(explored_dataset) == 0:
+            self.finalize()
+            return self.exit_codes.EMPTY_EXPLORATION_DATASET
         
         self.ctx.exploration = []
 

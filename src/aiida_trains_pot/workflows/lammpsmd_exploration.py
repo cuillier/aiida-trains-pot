@@ -21,10 +21,7 @@ PESData = DataFactory("pesdata")
 def LammpsFrameExtraction(
     sampling_time,
     saving_frequency,
-    thermalization_time=lambda: Float(0),
-    check_vacuum=lambda: Bool(False),
-    min_vacuum=lambda: Float(5.0),  # noqa B008
-    target_vacuum=lambda: Float(15.0),  # noqa B008
+    thermalization_time,
     **trajectories,
 ):
     """Extract frames from trajectory."""
@@ -50,12 +47,6 @@ def LammpsFrameExtraction(
 
         while i < trajectory.number_steps:
             frame = trajectory.get_step_structure(i).get_ase()
-            if check_vacuum:
-                frame = enlarge_vacuum(
-                    frame,
-                    min_vacuum=min_vacuum.value,
-                    target_vacuum=target_vacuum.value,
-                )
 
             extracted_frames.append(
                 {
@@ -67,6 +58,7 @@ def LammpsFrameExtraction(
                     "pbc": frame.get_pbc(),
                 }
             )
+            
             extracted_frames[-1]["style"] = integration_style
             extracted_frames[-1]["temp"] = temperature
             extracted_frames[-1]["timestep"] = timestep
@@ -114,6 +106,9 @@ def generate_potential(potential, pair_style) -> LammpsPotentialData:
 ###################################################################
 ##                       DEFAULT VALUES                          ##
 ###################################################################
+
+DEFAULT_thermalization_time = Float(0.0)
+DEFAULT_sampling_time = Float(1.0)
 
 DEFAULT_potential_pair_style = Str("mace no_domain_decomposition")
 DEFAULT_max_restarts = 3
@@ -163,15 +158,28 @@ DEFAULT_parameters = Dict(
 ###################################################################
 
 
-class ExplorationWorkChain(WorkChain):
+class LammpsMDWorkChain(WorkChain):
     """A workchain to loop over structures and submit LammpsWorkChain with retries."""
 
     @classmethod
     def define(cls, spec):
         """Input and output specification."""
         super().define(spec)
-        spec.input("params_list", valid_type=List, help="List of parameters for md")
-        spec.input("parameters", valid_type=Dict, help="Global parameters for lammps")
+        spec.input(
+            "input_structures",
+            valid_type=PESData,
+            help="Input structures for lammps",
+        )
+        spec.input(
+            "params_list", 
+            valid_type=List, 
+            help="List of ensemble parameters (temperature, pressure, etc.) for MD"
+        )
+        spec.input(
+            "parameters",  
+            valid_type=Dict, 
+            help="Global parameters for LAMMPS"
+        )
         spec.input(
             "potential_lammps",
             valid_type=SinglefileData,
@@ -188,18 +196,22 @@ class ExplorationWorkChain(WorkChain):
         spec.input(
             "sampling_time",
             valid_type=Float,
+            default=lambda: DEFAULT_sampling_time,
+            required=False,
             help="Correlation time for frame extraction",
+        )
+        spec.input(
+            "thermalization_time",
+            valid_type=Float,
+            default=lambda: DEFAULT_thermalization_time,
+            required=False,
+            help="Thermalization time to wait before sampling trajectories."
         )
         spec.input(
             "protocol",
             valid_type=Str,
             help="Protocol for the calculation",
             required=False,
-        )
-        spec.input(
-            "lammps_input_structures",
-            valid_type=PESData,
-            help="Input structures for lammps",
         )
 
         spec.expose_inputs(
@@ -211,12 +223,12 @@ class ExplorationWorkChain(WorkChain):
 
         spec.inputs.validator = cls.validate_inputs
 
-        spec.output_namespace("md", dynamic=True, help="Exploration outputs")
-
-        spec.outline(
-            cls.run_md,
-            cls.finalize_md,
+        spec.output(
+            "explored_dataset", 
+            valid_type=PESData,
+            help="Exploration outputs"
         )
+
         spec.outline(
             cls.run_md,
             while_(cls.not_converged)(
@@ -248,7 +260,7 @@ class ExplorationWorkChain(WorkChain):
         self.ctx.dict_wc = {}
         self.ctx.iteration = 0
         # Loop over structures
-        for structure in self.inputs.lammps_input_structures.get_ase_list():
+        for structure in self.inputs.input_structures.get_ase_list():
             inputs = self.exposed_inputs(LammpsWorkChain, namespace="md")
             inputs.lammps.structure = StructureData(ase=structure)
             inputs.lammps.potential = generate_potential(potential, str(self.inputs.potential_pair_style.value))
@@ -362,12 +374,23 @@ class ExplorationWorkChain(WorkChain):
                     self.ctx.rerun_wc.append(ii)
 
         return len(self.ctx.rerun_wc) > 0
-
+    
     def finalize_md(self):
-        """Collect the results from the completed LAMMPS calculations."""
-        md_out = {}
+        """Run exploration frame extraction."""
+        parameters = AttributeDict(self.inputs.parameters)
+        dump_rate = int(self.inputs.sampling_time / parameters.control.timestep)
+         
+        trajectories = {}
         for ii, calc in enumerate(self.ctx.md_wc):
             if calc.exit_status == 0:
-                md_out[f"md_{ii}"] = {el: calc.outputs[el] for el in calc.outputs}
+                trajectories[f"md_{ii}"] = {el: calc.outputs[el] for el in calc.outputs}
 
-        self.out("md", md_out)
+        explored_dataset = LammpsFrameExtraction(
+            self.inputs.sampling_time,
+            dump_rate,
+            thermalization_time=self.inputs.thermalization_time,
+            **trajectories,
+        )["explored_dataset"]
+
+        self.out("explored_dataset", explored_dataset)
+
