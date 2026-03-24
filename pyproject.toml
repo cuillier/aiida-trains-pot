@@ -38,10 +38,9 @@ Source = "https://github.com/cuillier/aiida-trains-pot"
 "trains_pot.metatrain"        = "aiida_trains_pot.workflows.meta_train:MetaTrainWorkChain"
 "trains_pot.labelling"        = "aiida_trains_pot.workflows.abinitiolabelling:AbInitioLabellingWorkChain"
 "trains_pot.training"         = "aiida_trains_pot.workflows.training:TrainingWorkChain"
-"trains_pot.exploration"      = "aiida_trains_pot.workflows.exploration:ExplorationWorkChain"
 "trains_pot.workflow"         = "aiida_trains_pot.workflows.aiida_trains_pot:TrainsPotWorkChain"
 "trains_pot.constrained"      = "aiida_trains_pot.workflows.pwconstrained:PwConstrainedWorkChain"
-#"trains_pot.lammpsmd"         = "aiida_trains_pot.workflows.lammpsmd_exploration:LammpsMDWorkChain"
+"trains_pot.lammpsmd"         = "aiida_trains_pot.workflows.lammpsmd_exploration:LammpsMDWorkChain"
 
 
 [project.entry-points.'aiida.calculations']

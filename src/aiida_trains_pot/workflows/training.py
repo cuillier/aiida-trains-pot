@@ -11,14 +11,12 @@ MetaWorkChain = WorkflowFactory("trains_pot.metatrain")
 MaceWorkChain = WorkflowFactory("trains_pot.macetrain")
 PESData = DataFactory("pesdata")
 
-DEFAULT_NON_TRAIN_FRAC = Float(0.2)
 DEFAULT_SEED = Int(42)
-
 
 @calcfunction
 def SplitDataset(
     dataset,
-    non_training_fraction=DEFAULT_NON_TRAIN_FRAC,
+    non_training_fraction,
     seed=DEFAULT_SEED,
 ):
     """Split dataset preserving groups with stochastic rounding."""
@@ -151,7 +149,9 @@ class TrainingWorkChain(WorkChain):
     ######################################################
     ##                 DEFAULT VALUES                   ##
     ######################################################
-    DEFAULT_training_engine = "MACE"
+    DEFAULT_training_engine       = Str("MACE")
+    DEFAULT_num_potentials        = Int(2)
+    DEFAULT_non_training_fraction = Float(0.2)
 
     ACCEPTED_ENGINES = ["MACE", "META"]
     ######################################################
@@ -160,11 +160,21 @@ class TrainingWorkChain(WorkChain):
     def define(cls, spec):
         """Input and output specification."""
         super().define(spec)
-        spec.input("num_potentials", valid_type=Int, default=lambda: Int(1), required=False)
-        spec.input("non_training_fraction", valid_type=Float, default=lambda: Float(0.2), required=False)
+        spec.input(
+            "num_potentials", 
+            valid_type=Int, 
+            default=lambda: cls.DEFAULT_num_potentials, 
+            required=False
+        )
+        spec.input(
+            "non_training_fraction", 
+            valid_type=Float, 
+            default=lambda: cls.DEFAULT_non_training_fraction, 
+            required=False
+        )
         spec.input(
             "engine",
-            default=lambda: Str(cls.DEFAULT_training_engine),
+            default=lambda: cls.DEFAULT_training_engine,
             valid_type=Str,
             help="Training engine",
             required=True,
