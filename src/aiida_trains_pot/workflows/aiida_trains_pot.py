@@ -19,12 +19,9 @@ load_profile()
 DatasetAugmentationWorkChain = WorkflowFactory("trains_pot.datasetaugmentation")
 TrainingWorkChain = WorkflowFactory("trains_pot.training")
 AbInitioLabellingWorkChain = WorkflowFactory("trains_pot.labelling")
-ExplorationWorkChain = WorkflowFactory("trains_pot.exploration")
 EvaluationCalculation = CalculationFactory("trains_pot.evaluation")
 PESData = DataFactory("pesdata")
 PwBaseWorkChain = WorkflowFactory("quantumespresso.pw.base")
-
-ALLOWED_ENGINES = ["MACE", "META"]
 
 
 @calcfunction
@@ -85,13 +82,6 @@ def SelectToLabel(evaluated_dataset, thr_energy, thr_forces, thr_stress, max_fra
     }
 
 
-def validate_engine(value, _):
-    """Validate the training engine input."""
-    if value.value not in ALLOWED_ENGINES:
-        return f"Invalid training engine: {value.value}. Must be one of {ALLOWED_ENGINES}."
-    return None
-
-
 ######################################################
 ##                 DEFAULT VALUES                   ##
 ######################################################
@@ -148,10 +138,18 @@ class TrainsPotWorkChain(WorkChain):
             "training_engine",
             valid_type=Str,
             default=lambda: DEFAULT_training_engine,
-            help=f"Training engine (allowed values: {ALLOWED_ENGINES})",
+            help=f"Training engine (allowed values: MACE, META)",
             required=False,
-            validator=validate_engine,
         )
+        """
+        spec.input(
+            "exploration_engine",
+            valid_type=Str,
+            default=lambda: DEFAULT_exploration_engine,
+            help=f"Exploration engine (allowed values: {ALLOWED_EXPLORATION_ENGINES})",
+            required=False,
+        )
+        """
         spec.input(
             "do_training",
             valid_type=Bool,
@@ -259,8 +257,8 @@ class TrainsPotWorkChain(WorkChain):
         spec.input_namespace(
             "exploration.inputs",
             dynamic=True,
-            help="Inputs for the chosen exploration workchain.",
-        ) 
+            help="Input parameters for the exploration workchain.",
+        )
         spec.input(
             "exploration.num_random_input_structures",
             valid_type=Int,
@@ -589,9 +587,9 @@ class TrainsPotWorkChain(WorkChain):
 
     def exploration(self):
         """Run exploration."""
-        ExplorationWorkChain = WorkflowFactory(self.inputs.exploration.entry_point)
+        ExplorationWorkChain = WorkflowFactory(self.inputs.exploration.entry_point.value)
 
-        inputs = self.inputs.exploration.inputs
+        inputs = dict(self.inputs.exploration.inputs)
 
         # Select random input structures for LAMMPS avoiding isolated atoms
         discarded = set()
@@ -608,19 +606,19 @@ class TrainsPotWorkChain(WorkChain):
                 break
 
             x = random.choice(range(len(self.ctx.exploration_input_dataset)))
-            if len(self.ctx.lammps_input_structures.get_ase_item(x)) < 2:  # noqa: PLR2004
+            if len(self.ctx.exploration_input_dataset.get_ase_item(x)) < 2:  # noqa: PLR2004
                 discarded.add(x)
                 continue  # reject isolated atoms
             if x in selected:
                 continue  # reject duplicate
             selected.append(x)
 
-        exploration_input_structures = PESData([self.ctx.exploration_input_structures.get_item(key) for key in selected])
+        exploration_input_structures = PESData([self.ctx.exploration_input_dataset.get_item(key) for key in selected])
         
-        inputs.potential_lammps = self.ctx.potentials_lammps[-1]
-        inputs.potential_ase    = self.ctx.potentials_ase[-1]
-        inputs.input_structures = exploration_input_structures
-
+        inputs['potential_lammps'] = self.ctx.potentials_lammps[-1]
+        #inputs['potential_ase']    = self.ctx.potentials_ase[-1]
+        inputs['input_structures'] = exploration_input_structures
+        
         future = self.submit(ExplorationWorkChain, **inputs)
 
         self.report(f"Launched {self.inputs.exploration.entry_point} ExplorationWorkChain with dataset <{future.pk}>")
@@ -642,7 +640,8 @@ class TrainsPotWorkChain(WorkChain):
     def finalize_dataset_augmentation(self):
         """Finalize dataset augmentation."""
         self.ctx.dataset += self.ctx.dataset_augmentation.outputs.structures.global_structures
-        self.ctx.input_lammps_dataset = self.ctx.dataset
+        if "input_dataset" not in self.inputs.exploration:
+            self.ctx.exploration_input_dataset = self.ctx.dataset
 
     def finalize_ab_initio_labelling(self):
         """Finalize ab_initio_labelling calculations."""

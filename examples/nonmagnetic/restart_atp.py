@@ -16,7 +16,6 @@ import yaml
 import os
 from aiida_trains_pot.utils.restart import models_from_trainingwc,  models_from_aiidatrainspotwc
 from aiida_trains_pot.utils.generate_config import generate_lammps_md_config
-from aiida_trains_pot.aiida_trains_pot_workflow.exploration_wc import DEFAULT_parameters
 
 load_profile('develop')
 
@@ -28,26 +27,25 @@ TrainsPot   = WorkflowFactory('trains_pot.workflow')
 #                     START MACHINE PARAMETERS                     #
 ####################################################################
 
-QE_code                 = load_code('qe7.2-cpu-pw@midway3')
-#QE_code                 = load_code('qe7.4-gpu-pw@midway3')
+QE_code                 = load_code('qe7.4-gpu-pw@midway3')
 MACE_train_code         = load_code('symmetrix_train@midway3')
 MACE_preprocess_code    = load_code('symmetrix_preprocess@midway3')
 MACE_postprocess_code   = load_code('symmetrix_postprocess@midway3')
-LAMMPS_code             = load_code('symmetrix_lammps_hopper@midway3')
-EVALUATION_code         = load_code('committee_evaluation_symmetrix')
+LAMMPS_code             = load_code('symmetrix_lammps_ampere@midway3')
+EVALUATION_code         = load_code('symmetrix_committee_evaluation')
 
 ACCOUNT = "pi-gagalli"
 CPU_PARTITION = "gagalli-csl2"
 GPU_PARTITION = "gagalli-gpu"
 
 QE_machine = {
-'time'                             : "24:00:00",
+'time'                             : "01:00:00",
 'nodes'                            : 1,
-'gpu'                              : 0,
-'taskpn'                           : 48,
-'cpupt'                            : 1,
+'gpu'                              : 1,
+'taskpn'                           : 1,
+'cpupt'                            : 8,
 'account'                          : ACCOUNT,
-'partition'                        : CPU_PARTITION,
+'partition'                        : GPU_PARTITION,
 }
 
 MACE_machine = {
@@ -109,7 +107,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 # Input structures
 ###############################################
 
-input_atoms = read(os.path.join(script_dir, 'LCO.xyz'),
+input_atoms = read(os.path.join(script_dir, 'SiC.xyz'),
                    index=':', format='extxyz')
 input_structures = PESData(input_atoms)
 
@@ -129,17 +127,16 @@ builder                             = TrainsPot.get_builder(abinitiolabeling_cod
 
 # These flags control what is done on the first iteration 
 # If all are false, only do committee evaluation
-builder.do_dataset_augmentation     = Bool(True)
-builder.do_ab_initio_labelling      = Bool(True)
-builder.do_training                 = Bool(True)
+builder.do_dataset_augmentation     = Bool(False)
+builder.do_ab_initio_labelling      = Bool(False)
+builder.do_training                 = Bool(False)
 builder.do_exploration              = Bool(True)
-builder.bypass_exploration          = Bool(True)    # Skip exploration step (as if we ran for 0 MD timesteps and only dumped the starting structure)
 builder.max_loops                   = Int(2)
 
 #builder.dataset = load_node(112466) + load_node(114182)
 
 # For skipping to the exploration step, using a previous TrainingWorkChaini
-#models_from_trainingwc(builder, 114098, get_labelled_dataset=False, get_config=False) # TrainingWorkChain node
+models_from_trainingwc(builder, 3315, get_labelled_dataset=True, get_config=True) # TrainingWorkChain node
 
 # For skipping to the exploration step, using existing models
 #builder.models_lammps = {"pot_1": load_node(2536)}  # mace-mh-0 omat_pbe head, La-Sr-Co-O system, symmetrix format
@@ -158,18 +155,18 @@ builder.max_loops                   = Int(2)
 builder.thr_energy          = Float(0.002) # eV/atom
 builder.thr_forces          = Float(0.100) # eV/Angstrom
 builder.thr_stress          = Float(0.010) # eV/A3
-builder.max_selected_frames = Int(40)       # Number of DFT calculations per iteration
+builder.max_selected_frames = Int(8)       # Number of DFT calculations per iteration
 
 ###############################################
 # Setup dataset augmentation
 ###############################################
 
 builder.dataset_augmentation.do_rattle_strain_defects           = Bool(True)
-builder.dataset_augmentation.do_input                           = Bool(False)
+builder.dataset_augmentation.do_input                           = Bool(True)
 builder.dataset_augmentation.do_isolated                        = Bool(False)
 builder.dataset_augmentation.do_clusters                        = Bool(False)
 builder.dataset_augmentation.do_slabs                           = Bool(False)
-builder.dataset_augmentation.do_replication                     = Bool(False)
+builder.dataset_augmentation.do_replication                     = Bool(True)
 builder.dataset_augmentation.do_check_vacuum                    = Bool(False)
 builder.dataset_augmentation.do_substitution                    = Bool(False)  # Swapping
 builder.dataset_augmentation.do_magnetic                        = Bool(False)
@@ -177,11 +174,14 @@ builder.dataset_augmentation.do_alloys                          = Bool(False)
 
 # Rattle, strain, defect augmentations
 builder.dataset_augmentation.rsd.params.rattle_fraction         = Float(0.20)   # Displace by (at most) this fraction of the equilibrium bond distance
-builder.dataset_augmentation.rsd.params.max_tensile_strain      = Float(0.04)   # For LCO, approx. +10/-5% -> +- 50 kbar
-builder.dataset_augmentation.rsd.params.max_compressive_strain  = Float(0.04)
-builder.dataset_augmentation.rsd.params.n_configs               = Int(1)        # Number of RSD augmented calculations to do (per input structure)
-builder.dataset_augmentation.rsd.params.frac_vacancies          = Float(0.0)
-builder.dataset_augmentation.rsd.params.vacancies_per_config    = Int(0)
+builder.dataset_augmentation.rsd.params.max_tensile_strain      = Float(0.02)   # For LCO, approx. +10/-5% -> +- 50 kbar
+builder.dataset_augmentation.rsd.params.max_compressive_strain  = Float(0.02)
+builder.dataset_augmentation.rsd.params.n_configs               = Int(8)        # Number of RSD augmented calculations to do (per input structure)
+builder.dataset_augmentation.rsd.params.frac_vacancies          = Float(1/8)
+builder.dataset_augmentation.rsd.params.vacancies_per_config    = Int(1)
+
+builder.dataset_augmentation.replicate.min_dist                 = Float(4.0)
+builder.dataset_augmentation.replicate.max_atoms                = Int(8 * 2**3)
 
 # Others
 #builder.dataset_augmentation.clusters.n_clusters                = Int(80)
@@ -196,18 +196,11 @@ builder.dataset_augmentation.rsd.params.vacancies_per_config    = Int(0)
 #builder.dataset_augmentation.substitution.switches_fraction     = Float(0.2)
 #builder.dataset_augmentation.substitution.structures_fraction   = Float(0.1)
 
-builder.dataset_augmentation.magnetic.n_configs = Int(1)
-builder.dataset_augmentation.magnetic.max_frac_perturbed = Float(0.20)     # ABO3 -> Co is 1/5
-builder.dataset_augmentation.magnetic.selection_threshold = Float(0.4) # Prioritize augmenting already magnetic atoms 
-builder.dataset_augmentation.magnetic.perturbation_magnitude = Float(2.0)
-builder.dataset_augmentation.magnetic.collinear = Bool(True)
-
 ###############################################
 # Setup Ab initio labelling
 ###############################################
 
-
-builder.ab_initio_labelling.group_label                                                     = Str("LSCO-PBE")
+builder.ab_initio_labelling.group_label                                                     = Str("SiC")
 builder.ab_initio_labelling.quantumespresso.pw.metadata.options.withmpi                     = True
 builder.ab_initio_labelling.quantumespresso.pw.metadata.options.max_wallclock_seconds       = QE_time
 builder.ab_initio_labelling.quantumespresso.pw.metadata.options.import_sys_environment      = False
@@ -218,66 +211,34 @@ builder.ab_initio_labelling.quantumespresso.pw.metadata.options.account         
 builder.ab_initio_labelling.quantumespresso.pw.metadata.options.queue_name                  = QE_machine['partition']
 builder.ab_initio_labelling.quantumespresso.pw.metadata.options.custom_scheduler_commands   = '\n'.join([
     "#SBATCH --export=NONE",
+   f"#SBATCH --gres=gpu:{QE_machine['gpu']}",
+    "#SBATCH --constraint=A100",
 ])
 
-builder.ab_initio_labelling.quantumespresso.pw.settings                                     = {'cmdline': ['-nk', '4']}
-
 builder.ab_initio_labelling.quantumespresso.pw.metadata.options.prepend_text               += "\n" + f"export OMP_NUM_THREADS={QE_machine['cpupt']}\n"
-builder.ab_initio_labelling.batch_size                                                      = 10    # Limit number of submitted jobs to avoid storage/job quotas or overwhelming the daemon 
+#builder.ab_initio_labelling.batch_size                                                      = 10    # Limit number of submitted jobs to avoid storage/job quotas or overwhelming the daemon 
 builder.ab_initio_labelling.quantumespresso.clean_workdir                                   = True  
 builder.ab_initio_labelling.quantumespresso.max_iterations                                  = 3     # Max number of times we can fail SCF convergence
 
 
-######## New features in cuillier/aiida_trains_pot fork ########
-
-# For constrained magnetization, using a series of Lagrange multipliers (lambda_series, in Ry)
-# - Each calculation will be restarted from the wavefunctions of the previous
-# - Stop if any PwBaseWorkChain fails to converge
-# constrained_kinds limits starting_magnetization (and constraints) to specified species
-builder.ab_initio_labelling.lambda_series                                                   = List([0.0, 2.0, 4.0, 8.0, 16.0])
-builder.ab_initio_labelling.constrained_kinds                                               = List(['Co'])
-# Make sure to also set qe_parameters['SYSTEM']['constrained_magnetization']
-
-# For Hubbard U corrections
-# See aiida_quantumespresso.data.hubbard_structure.HubbardStructure.initialize_onsites_hubbard()
-builder.ab_initio_labelling.onsites_hubbard =List([{'atom_name': 'Co',
-                                                    'atom_manifold': '3d',
-                                                    'value': 3.0}])
-
-# For spin-polarized calculations
-# Currently only SpinType.NONE and SpinType.COLLINEAR are implemented.
-builder.ab_initio_labelling.spin_type = SpinType.COLLINEAR
-
-################################################################
-
 
 # Can either set kpoints to a KpointsData object or set kpoints_distance in 1/Ang
-#kpoints = KpointsData()
-#kpoints.set_kpoints_mesh([1,1,1]) # Gamma point
-builder.ab_initio_labelling.quantumespresso.kpoints_distance            = Float(0.15)
-builder.ab_initio_labelling.quantumespresso.kpoints_force_parity        = Bool(False)
-
+kpoints = KpointsData()
+kpoints.set_kpoints_mesh([1,1,1]) # Gamma point
+builder.ab_initio_labelling.quantumespresso.kpoints = kpoints
 
 # Manual overrides
 qe_parameters = builder.ab_initio_labelling.quantumespresso.pw.parameters.get_dict()
 # CONTROL
 qe_parameters['CONTROL']['disk_io']     = 'low'
 # SYSTEM
-qe_parameters['SYSTEM']['ecutwfc']      =   110.
-qe_parameters['SYSTEM']['ecutrho']      = 4*110.
-qe_parameters['SYSTEM']['occupations']  = 'smearing'
-qe_parameters['SYSTEM']['smearing']     = 'cold'
-qe_parameters['SYSTEM']['degauss']      =  0.02
-qe_parameters['SYSTEM']['constrained_magnetization'] = 'atomic' 
-qe_parameters['SYSTEM']['nosym']        = True
+qe_parameters['SYSTEM']['occupations']  = 'fixed'
 # ELECTRONS
-qe_parameters['ELECTRONS']['electron_maxstep']  = 200
-qe_parameters['ELECTRONS']['mixing_mode']       = 'plain'
-qe_parameters['ELECTRONS']['mixing_beta']       = 0.2
-qe_parameters['ELECTRONS']['conv_thr']          = 40 * 1e-7  # Looser tolerance for constrained calculations
+qe_parameters['ELECTRONS']['electron_maxstep']  = 50
+qe_parameters['ELECTRONS']['mixing_beta']       = 0.4
+qe_parameters['ELECTRONS']['conv_thr']          = 1e-7 
 
 builder.ab_initio_labelling.quantumespresso.pw.parameters = Dict(qe_parameters)
-
 
 ##############################################
 # Setup MACE
@@ -293,7 +254,7 @@ builder.training.mace.train.preprocess_code                             = MACE_p
 builder.training.mace.train.postprocess_code                            = MACE_postprocess_code
 builder.training.mace.train.do_preprocess                               = Bool(False)
 
-builder.training.num_potentials                                         = Int(4)
+builder.training.num_potentials                                         = Int(2)
 builder.training.mace.train.metadata.options.withmpi                    = False
 builder.training.mace.train.metadata.options.resources                  = {
                                                                             'num_machines': MACE_machine['nodes'],
@@ -311,17 +272,17 @@ builder.training.mace.train.metadata.options.custom_scheduler_commands  = "\n".j
 ])
 
 # For multihead fine-tuning
-#builder.training.mace.train.protocol                                    = Str("replay-finetune")
-#builder.training.mace.train.finetune_model                              = load_node(7561) # mace-mh-0 omat-pbe head
+builder.training.mace.train.protocol                                    = Str("naive-finetune")
+builder.training.mace.train.finetune_model                              = load_node(2777) # mace-mh-0 omat-pbe head
 #builder.training.mace.train.finetune_replay_dataset                     = load_node(7670) # mace-mh-1 replay La-Sr-Co-O combinations
 
 # Setup LAMMPS
 ###############################################
-# Set random_input_structures_lammps to randomly select from lammps_input_structures
-builder.random_input_structures_lammps                                      = Bool(True)
-builder.lammps_input_structures                                             = input_structures
-# Run this many MD trajectories at at the specified temperatres and pressures.
-builder.num_random_structures_lammps                                        = Int(20)
+
+builder.exploration.entry_point                                             = Str("trains_pot.lammpsmd")
+
+#builder.exploration.input_dataset                                           = input_structures
+builder.exploration.num_random_input_structures                             = Int(4)
 
 # If builder.bypass_exploration = True, none of the exploration parameters below matter.
 # The (randomly selected) lammps input structures are passed as-is for committee evaluation.
@@ -329,36 +290,59 @@ builder.num_random_structures_lammps                                        = In
 #   that dataset to lammps_input_structures
 
 # Generate define LAMMPS trajectory parameters 
-temperatures                                                                = [1]           # Kelvin
+temperatures                                                                = [500]           # Kelvin
 pressures                                                                   = [0]           # bar
 steps                                                                       = [1000] 
 styles                                                                      = ["npt"]
 timestep                                                                    = 0.001     # ps
-builder.exploration.params_list                                             = generate_lammps_md_config(temperatures, pressures, steps, styles, timestep)
 
-lammps_parameters = DEFAULT_parameters.get_dict()
-lammps_parameters['control']['timestep']                                    = timestep
-builder.exploration.parameters                                              = Dict(lammps_parameters)
-
-builder.exploration.md.lammps.settings                                      = Dict({"additional_cmdline_params": 
-                                                                                        ["-k", "on", "g", "1", 
-                                                                                         "-sf", "kk", 
-                                                                                         "-pk", "kokkos", "newton", "on", "neigh", "half"]})
-builder.exploration.potential_pair_style                                    = Str("symmetrix/mace")
-builder.exploration.md.lammps.metadata.options.resources                    = {'num_machines': LAMMPS_machine['nodes'],
-                                                                               'num_mpiprocs_per_machine': LAMMPS_machine['taskpn'],
-                                                                               'num_cores_per_mpiproc': LAMMPS_machine['cpupt']}
-builder.exploration.md.lammps.metadata.options.max_wallclock_seconds        = LAMMPS_time
-builder.exploration.md.lammps.metadata.options.import_sys_environment       = False
-builder.exploration.md.lammps.metadata.options.account                      = LAMMPS_machine['account']
-builder.exploration.md.lammps.metadata.options.queue_name                   = LAMMPS_machine['partition']
-builder.exploration.md.lammps.metadata.options.custom_scheduler_commands    = "\n".join([f"#SBATCH --gres=gpu:{LAMMPS_machine['gpu']}",
-                                                                                          "#SBATCH --export=NONE",
-                                                                                          "#SBATCH --exclude=midway3-0298",])    # Sometimes fails with Kokkos compiled for Ampere GPUs
-
-builder.frame_extraction.sampling_time                                      = Float(0.1) # in ps how often frames are written to the trajectory file
-builder.frame_extraction.thermalization_time                                = Float(0.0) # in ps how long the thermalization time is. Frames in that time are not considered
-
+# The namespace exploration.inputs is dynamic to allow any workchain that takes
+# Input:
+#   potential_ase/potential_lammps (SinglefileData)
+#   input_structures (PESData)
+# Output:
+#   explored_dataset (PESData)
+# We have to provide the other inputs as a big dumb dictionary
+builder.exploration.inputs = {
+    "params_list": List(generate_lammps_md_config(temperatures, pressures, steps, styles, timestep)),
+    "parameters": Dict({
+        "control": {
+            "timestep": timestep,
+        },
+    }),
+    "potential_pair_style": Str("symmetrix/mace"),
+    "sampling_time":        Float(0.1),
+    "thermalization_time":  Float(0.5),
+    "md": {
+        "lammps": {
+            "settings": Dict({
+                "additional_cmdline_params": [
+                    "-k", "on", "g", "1", 
+                    "-sf", "kk", 
+                    "-pk", "kokkos", "newton", "on", "neigh", "half"
+                ]
+            }),
+            "metadata": {
+                "options": {
+                    "resources": {
+                        'num_machines': LAMMPS_machine['nodes'],
+                        'num_mpiprocs_per_machine': LAMMPS_machine['taskpn'],
+                        'num_cores_per_mpiproc': LAMMPS_machine['cpupt'],
+                    },
+                    "max_wallclock_seconds": LAMMPS_time,
+                    "import_sys_environment": False,
+                    "account": LAMMPS_machine['account'],
+                    "queue_name": LAMMPS_machine['partition'],
+                    "custom_scheduler_commands": "\n".join([
+                        f"#SBATCH --gres=gpu:{LAMMPS_machine['gpu']}",
+                         "#SBATCH --export=NONE",
+                         "#SBATCH --constraint=A100",
+                    ]),
+                },
+            },
+        },
+    },             
+}
 
 # Setup committee Evaluation
 ###############################################

@@ -1,0 +1,24 @@
+name: "aiida"
+
+# Reference data formatting
+energy_key: "dft_energy"
+forces_key: "dft_forces"
+stress_key: "dft_stress"
+
+default_dtype: "float32"
+
+energy_weight: 1
+forces_weight: 10
+stress_weight: 1
+loss: "universal"
+lr: 0.0001
+
+E0s: "average"
+
+max_num_epochs:  100
+batch_size: 4         
+valid_batch_size: 1
+
+enable_cueq: True
+device: "cuda"
+

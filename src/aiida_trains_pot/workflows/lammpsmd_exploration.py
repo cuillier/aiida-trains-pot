@@ -5,7 +5,7 @@ import tempfile
 
 from pathlib import Path
 
-from aiida.engine import WorkChain, append_, while_
+from aiida.engine import WorkChain, append_, while_, calcfunction
 from aiida.orm import Dict, Bool, Float, List, SinglefileData, Str, StructureData
 from aiida.plugins import DataFactory, WorkflowFactory
 from aiida_lammps.data.potential import LammpsPotentialData

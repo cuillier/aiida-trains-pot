@@ -42,18 +42,15 @@ Source = "https://github.com/cuillier/aiida-trains-pot"
 "trains_pot.constrained"      = "aiida_trains_pot.workflows.pwconstrained:PwConstrainedWorkChain"
 "trains_pot.lammpsmd"         = "aiida_trains_pot.workflows.lammpsmd_exploration:LammpsMDWorkChain"
 
-
 [project.entry-points.'aiida.calculations']
 "trains_pot.macetrain"        = "aiida_trains_pot.calculations.mace_train:MaceTrainCalculation"
 "trains_pot.metatrain"        = "aiida_trains_pot.calculations.meta_train:MetaTrainCalculation"
 "trains_pot.evaluation"       = "aiida_trains_pot.calculations.evaluation:EvaluationCalculation"
-#"trains_pot.lammpsmd"         = "aiida_trains_pot.lammps.lammps_plugin.calculations:LammpsBaseCalculation"
 
 [project.entry-points.'aiida.parsers']
 "trains_pot.macetrain"        = "aiida_trains_pot.parsers.mace_train:MaceBaseParser"
 "trains_pot.metatrain"        = "aiida_trains_pot.parsers.meta_train:MetaBaseParser"
 "trains_pot.evaluation"       = "aiida_trains_pot.parsers.evaluation:EvaluationParser"
-#"trains_pot.lammpsmd"         = "aiida_trains_pot.lammps.lammps_plugin.parsers:LammpsBaseParser"
 
 [project.entry-points."aiida.data"]
 "pesdata"                 = "aiida_trains_pot.data.pesdata:PESData"
