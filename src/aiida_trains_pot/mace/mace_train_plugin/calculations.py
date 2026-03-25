@@ -335,17 +335,17 @@ class MaceTrainCalculation(CalcJob):
                 if match:
                     mace_config_dict["seed"] = int(match.group(1))
  
+                # If not continuing a calculation with a handled exception,
+                # strip the epoch information to restart from epoch 0.
+                if self.inputs.restart.value:
+                    match = re.search(r"epoch-\d+", checkpoint_file)
+                    new_checkpoint_file = checkpoint_file.replace(match.group(), "epoch-0")
+                else:
+                    new_checkpoint_file = checkpoint_file
+
                 # Copy checkpoints
                 with checkpoints_folder.open(checkpoint_file, "rb") as source:
-                    new_checkpoint_file = f"checkpoints/{checkpoint_file}"
-                    
-                    # If we are not restarting from an interrupted calculation that was
-                    # handled by TrainingWorkChain, remove the epoch information
-                    if not self.inputs.restart.value:
-                        match = re.search(r"epoch-\d+", checkpoint_file)
-                        new_checkpoint_file.replace(match.group(), "epoch-0")
-
-                    with folder.open(new_checkpoint_file, "wb") as destination:
+                    with folder.open(f"checkpoints/{new_checkpoint_file}", "wb") as destination:
                         destination.write(source.read())
 
         with folder.open("config.yml", "w") as yaml_file:
