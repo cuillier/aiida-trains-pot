@@ -77,7 +77,7 @@ class MaceTrainWorkChain(BaseRestartWorkChain):
                         with calculation.outputs.retrieved.open(file_path, "rb") as handle:
                             folder_data.put_object_from_filelike(handle, file_in_folder)
                     self.ctx.inputs.checkpoints = folder_data
-
+        self.ctx.inputs.restart = True
 
     def setup(self):
         """Call the ``setup`` of the ``BaseRestartWorkChain`` and create the inputs dictionary in ``self.ctx.inputs``.

@@ -320,7 +320,7 @@ class MaceTrainCalculation(CalcJob):
             mace_config_dict["distributed"] = True
 
         # Save the checkpoints folder
-        if "checkpoints" in self.inputs and self.inputs.restart.value:
+        if "checkpoints" in self.inputs:
             mace_config_dict["restart_latest"] = True
             checkpoints_folder = self.inputs.checkpoints
             folder.get_subfolder("checkpoints", create=True)  # Create the checkpoints directory
@@ -331,13 +331,21 @@ class MaceTrainCalculation(CalcJob):
 
                 # Re-use the same seed from the previous checkpoint.
                 # Seed is assumed to be numeric after the first '-'
-                match = re.search(r"-(\d+)_", checkpoint_file) 
+                match = re.search(r"run-(\d+)_", checkpoint_file) 
                 if match:
                     mace_config_dict["seed"] = int(match.group(1))
-                
+ 
                 # Copy checkpoints
                 with checkpoints_folder.open(checkpoint_file, "rb") as source:
-                    with folder.open(f"checkpoints/{checkpoint_file}", "wb") as destination:
+                    new_checkpoint_file = f"checkpoints/{checkpoint_file}"
+                    
+                    # If we are not restarting from an interrupted calculation that was
+                    # handled by TrainingWorkChain, remove the epoch information
+                    if not self.inputs.restart.value:
+                        match = re.search(r"epoch-\d+", checkpoint_file)
+                        new_checkpoint_file.replace(match.group(), "epoch-0")
+
+                    with folder.open(new_checkpoint_file, "wb") as destination:
                         destination.write(source.read())
 
         with folder.open("config.yml", "w") as yaml_file:
