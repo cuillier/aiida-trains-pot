@@ -278,11 +278,14 @@ class LammpsMDWorkChain(WorkChain):
             inputs = self.exposed_inputs(LammpsWorkChain, namespace="md")
             inputs.lammps.structure = StructureData(ase=structure)
             inputs.lammps.potential = generate_potential(potential, str(self.inputs.potential_pair_style.value))
-
-            generate_pair_coeff = True
-            if "potential" in self.inputs.parameters:
-                if "pair_coeff_list" in self.inputs.parameters["potential"]:
-                    generate_pair_coeff = False
+ 
+            params_list = self.inputs.params_list.get_list()
+            input_parameters = self.inputs.parameters.get_dict()
+            
+            # Set default potential information
+            input_parameters.setdefault("potential", DEFAULT_parameters.get_dict()["potential"])
+            
+            generate_pair_coeff = "pair_coeff_list" not in self.inputs.parameters["potential"]
 
             # Pair coefficients for MACE potential without hybrid/overlay is always generated,
             # if needed it is overwritten
@@ -292,11 +295,7 @@ class LammpsMDWorkChain(WorkChain):
                 else:
                     pair_coeffs = [get_mace_pair_coeff(inputs.lammps.structure, hybrid=False)]
 
-            params_list = self.inputs.params_list.get_list()
-            input_parameters = self.inputs.parameters.get_dict()
 
-            # Set default potential information
-            input_parameters.setdefault('potential', DEFAULT_parameters.get_dict()['potential'])
             if "metatomic" in self.inputs.potential_pair_style.value:
                 if "potential_style_options" not in self.inputs.parameters["potential"]:
                     input_parameters["potential"]["potential_style_options"] = ["potential.dat"]
@@ -388,8 +387,7 @@ class LammpsMDWorkChain(WorkChain):
     
     def finalize_md(self):
         """Run exploration frame extraction."""
-        parameters = AttributeDict(self.inputs.parameters)
-        dump_rate = int(self.inputs.sampling_time / parameters.control.timestep)
+        dump_rate = int(self.inputs.sampling_time / self.inputs.parameters.control.timestep)
          
         trajectories = {}
         for ii, calc in enumerate(self.ctx.md_wc):

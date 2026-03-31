@@ -279,7 +279,7 @@ builder.training.mace.train.finetune_model                              = load_n
 ###############################################
 
 builder.exploration.entry_point                                             = Str("trains_pot.lammpsmd")
-builder.exploration.input_dataset                                           = input_structures
+#builder.exploration.input_dataset                                           = input_structures
 builder.exploration.num_random_input_structures                             = Int(4)
 
 # If builder.bypass_exploration = True, none of the exploration parameters below matter.
