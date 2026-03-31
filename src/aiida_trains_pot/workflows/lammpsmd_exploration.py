@@ -223,6 +223,7 @@ class LammpsMDWorkChain(WorkChain):
         spec.input(
             "protocol",
             valid_type=Str,
+            default=None,
             help="Protocol for the calculation",
             required=False,
         )
@@ -293,21 +294,18 @@ class LammpsMDWorkChain(WorkChain):
 
             params_list = self.inputs.params_list.get_list()
             input_parameters = self.inputs.parameters.get_dict()
+
+            # Set default potential information
+            input_parameters.setdefault('potential', DEFAULT_parameters.get_dict()['potential'])
             if "metatomic" in self.inputs.potential_pair_style.value:
-                if "potential" in self.inputs.parameters:
-                    if "potential_style_options" not in self.inputs.parameters["potential"]:
-                        input_parameters["potential"]["potential_style_options"] = ["potential.dat"]
+                if "potential_style_options" not in self.inputs.parameters["potential"]:
+                    input_parameters["potential"]["potential_style_options"] = ["potential.dat"]
             if self.inputs.protocol is not None:
                 if self.inputs.protocol == "vdw_d2":
-                    if "potential" in self.inputs.parameters:
-                        if "potential_style_options" not in self.inputs.parameters["potential"]:
-                            input_parameters["potential"]["potential_style_options"] = [
-                                "mace no_domain_decomposition momb 20.0 0.75 20.0"
-                            ]
-                    else:
-                        input_parameters["potential"] = {
-                            "potential_style_options": ["mace no_domain_decomposition momb 20.0 0.75 20.0"]
-                        }
+                    if "potential_style_options" not in self.inputs.parameters["potential"]:
+                        input_parameters["potential"]["potential_style_options"] = [
+                            "mace no_domain_decomposition momb 20.0 0.75 20.0"
+                        ]
                     if generate_pair_coeff:
                         # Generate DFT-D2 pair coefficients, it overwrites the MACE pair_coeff generated above
                         pair_coeffs = get_dftd2_pair_coeffs(inputs.lammps.structure)

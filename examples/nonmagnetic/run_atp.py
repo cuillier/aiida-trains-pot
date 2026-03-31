@@ -107,7 +107,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 # Input structures
 ###############################################
 
-input_atoms = read(os.path.join(script_dir, 'SiC.xyz'),
+input_atoms = read(os.path.join(script_dir, 'SiC_222.xyz'),
                    index=':', format='extxyz')
 input_structures = PESData(input_atoms)
 
@@ -176,11 +176,11 @@ builder.dataset_augmentation.do_alloys                          = Bool(False)
 builder.dataset_augmentation.rsd.params.rattle_fraction         = Float(0.20)   # Displace by (at most) this fraction of the equilibrium bond distance
 builder.dataset_augmentation.rsd.params.max_tensile_strain      = Float(0.02)   # For LCO, approx. +10/-5% -> +- 50 kbar
 builder.dataset_augmentation.rsd.params.max_compressive_strain  = Float(0.02)
-builder.dataset_augmentation.rsd.params.n_configs               = Int(8)        # Number of RSD augmented calculations to do (per input structure)
+builder.dataset_augmentation.rsd.params.n_configs               = Int(16)       # Number of RSD augmented calculations to do (per input structure)
 builder.dataset_augmentation.rsd.params.frac_vacancies          = Float(1/8)
 builder.dataset_augmentation.rsd.params.vacancies_per_config    = Int(1)
 
-builder.dataset_augmentation.replicate.min_dist                 = Float(4.0)
+builder.dataset_augmentation.replicate.min_dist                 = Float(1.5)
 builder.dataset_augmentation.replicate.max_atoms                = Int(8 * 2**3)
 
 # Others
@@ -234,7 +234,7 @@ qe_parameters['CONTROL']['disk_io']     = 'low'
 # SYSTEM
 qe_parameters['SYSTEM']['occupations']  = 'fixed'
 # ELECTRONS
-qe_parameters['ELECTRONS']['electron_maxstep']  = 50
+qe_parameters['ELECTRONS']['electron_maxstep']  = 100
 qe_parameters['ELECTRONS']['mixing_beta']       = 0.4
 qe_parameters['ELECTRONS']['conv_thr']          = 1e-7 
 

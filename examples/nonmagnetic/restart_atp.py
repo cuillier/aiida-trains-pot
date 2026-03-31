@@ -107,7 +107,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 # Input structures
 ###############################################
 
-input_atoms = read(os.path.join(script_dir, 'SiC.xyz'),
+input_atoms = read(os.path.join(script_dir, 'SiC_222.xyz'),
                    index=':', format='extxyz')
 input_structures = PESData(input_atoms)
 
@@ -118,7 +118,6 @@ input_structures = PESData(input_atoms)
 builder                             = TrainsPot.get_builder(abinitiolabeling_code     = QE_code,
                                                             abinitiolabeling_protocol = 'stringent',
                                                             pseudo_family             = 'PseudoDojo/0.5/PBE/SR/stringent/upf',
-                                                            md_code                   = LAMMPS_code,
                                                             dataset                   = input_structures,
                                                             )
 
@@ -136,7 +135,7 @@ builder.max_loops                   = Int(2)
 #builder.dataset = load_node(112466) + load_node(114182)
 
 # For skipping to the exploration step, using a previous TrainingWorkChaini
-models_from_trainingwc(builder, 3315, get_labelled_dataset=True, get_config=True) # TrainingWorkChain node
+models_from_trainingwc(builder, 4928, get_labelled_dataset=True, get_config=True) # TrainingWorkChain node
 
 # For skipping to the exploration step, using existing models
 #builder.models_lammps = {"pot_1": load_node(2536)}  # mace-mh-0 omat_pbe head, La-Sr-Co-O system, symmetrix format
@@ -176,11 +175,11 @@ builder.dataset_augmentation.do_alloys                          = Bool(False)
 builder.dataset_augmentation.rsd.params.rattle_fraction         = Float(0.20)   # Displace by (at most) this fraction of the equilibrium bond distance
 builder.dataset_augmentation.rsd.params.max_tensile_strain      = Float(0.02)   # For LCO, approx. +10/-5% -> +- 50 kbar
 builder.dataset_augmentation.rsd.params.max_compressive_strain  = Float(0.02)
-builder.dataset_augmentation.rsd.params.n_configs               = Int(8)        # Number of RSD augmented calculations to do (per input structure)
+builder.dataset_augmentation.rsd.params.n_configs               = Int(16)       # Number of RSD augmented calculations to do (per input structure)
 builder.dataset_augmentation.rsd.params.frac_vacancies          = Float(1/8)
 builder.dataset_augmentation.rsd.params.vacancies_per_config    = Int(1)
 
-builder.dataset_augmentation.replicate.min_dist                 = Float(4.0)
+builder.dataset_augmentation.replicate.min_dist                 = Float(1.5)
 builder.dataset_augmentation.replicate.max_atoms                = Int(8 * 2**3)
 
 # Others
@@ -234,7 +233,7 @@ qe_parameters['CONTROL']['disk_io']     = 'low'
 # SYSTEM
 qe_parameters['SYSTEM']['occupations']  = 'fixed'
 # ELECTRONS
-qe_parameters['ELECTRONS']['electron_maxstep']  = 50
+qe_parameters['ELECTRONS']['electron_maxstep']  = 100
 qe_parameters['ELECTRONS']['mixing_beta']       = 0.4
 qe_parameters['ELECTRONS']['conv_thr']          = 1e-7 
 
@@ -280,8 +279,7 @@ builder.training.mace.train.finetune_model                              = load_n
 ###############################################
 
 builder.exploration.entry_point                                             = Str("trains_pot.lammpsmd")
-
-#builder.exploration.input_dataset                                           = input_structures
+builder.exploration.input_dataset                                           = input_structures
 builder.exploration.num_random_input_structures                             = Int(4)
 
 # If builder.bypass_exploration = True, none of the exploration parameters below matter.
@@ -292,7 +290,7 @@ builder.exploration.num_random_input_structures                             = In
 # Generate define LAMMPS trajectory parameters 
 temperatures                                                                = [500]           # Kelvin
 pressures                                                                   = [0]           # bar
-steps                                                                       = [1000] 
+steps                                                                       = [10000] 
 styles                                                                      = ["npt"]
 timestep                                                                    = 0.001     # ps
 
@@ -315,6 +313,7 @@ builder.exploration.inputs = {
     "thermalization_time":  Float(0.5),
     "md": {
         "lammps": {
+            "code": LAMMPS_code,
             "settings": Dict({
                 "additional_cmdline_params": [
                     "-k", "on", "g", "1", 
@@ -322,7 +321,7 @@ builder.exploration.inputs = {
                     "-pk", "kokkos", "newton", "on", "neigh", "half"
                 ]
             }),
-            "metadata": {
+            "metadata": { 
                 "options": {
                     "resources": {
                         'num_machines': LAMMPS_machine['nodes'],

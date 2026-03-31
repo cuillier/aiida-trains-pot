@@ -413,7 +413,6 @@ class TrainsPotWorkChain(WorkChain):
         cls,
         dataset,
         abinitiolabeling_code,
-        md_code,
         training_code=None,
         abinitiolabeling_protocol=None,
         pseudo_family=None,
