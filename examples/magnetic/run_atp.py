@@ -241,9 +241,11 @@ builder.ab_initio_labelling.constrained_kinds                                   
 
 # For Hubbard U corrections
 # See aiida_quantumespresso.data.hubbard_structure.HubbardStructure.initialize_onsites_hubbard()
-builder.ab_initio_labelling.onsites_hubbard =List([{'atom_name': 'Co',
-                                                    'atom_manifold': '3d',
-                                                    'value': 3.0}])
+# One list element per manifold
+builder.ab_initio_labelling.onsites_hubbard = List([{'atom_name': 'Co',
+                                                     'atom_manifold': '3d',
+                                                     'value': 3.0}])
+# Same structure for ab_initio_labelling.intersites_hubbard and HubbardStructure.initialize_interesites_hubbard()
 
 # For spin-polarized calculations
 # Currently only SpinType.NONE and SpinType.COLLINEAR are implemented.
