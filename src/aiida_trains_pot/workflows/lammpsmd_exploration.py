@@ -285,7 +285,7 @@ class LammpsMDWorkChain(WorkChain):
             # Set default potential information
             input_parameters.setdefault("potential", DEFAULT_parameters.get_dict()["potential"])
             
-            generate_pair_coeff = "pair_coeff_list" not in self.inputs.parameters["potential"]
+            generate_pair_coeff = "pair_coeff_list" not in input_parameters["potential"]
 
             # Pair coefficients for MACE potential without hybrid/overlay is always generated,
             # if needed it is overwritten
@@ -387,7 +387,8 @@ class LammpsMDWorkChain(WorkChain):
     
     def finalize_md(self):
         """Run exploration frame extraction."""
-        dump_rate = int(self.inputs.sampling_time / self.inputs.parameters.control.timestep)
+        timestep = self.ctx.md_wc[-1].inputs.lammps.parameters.get_dict()['control']['timestep']
+        dump_rate = int(self.inputs.sampling_time / dt)
          
         trajectories = {}
         for ii, calc in enumerate(self.ctx.md_wc):

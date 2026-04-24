@@ -290,7 +290,7 @@ builder.exploration.num_random_input_structures                             = In
 # Generate define LAMMPS trajectory parameters 
 temperatures                                                                = [500]           # Kelvin
 pressures                                                                   = [0]           # bar
-steps                                                                       = [10000] 
+steps                                                                       = [1500] 
 styles                                                                      = ["npt"]
 timestep                                                                    = 0.001     # ps
 
