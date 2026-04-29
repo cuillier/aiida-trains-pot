@@ -111,23 +111,15 @@ class AbInitioLabellingWorkChain(WorkChain):
             required=False,
             default=lambda: Int(1000),
         )
-        spec.input(
-            "lambda_series",
-            valid_type=List,
-            help="If provided, perform a series of constrained magnetization calculations with the specified lambda values.",
-            required=False,
-            default=lambda: List([]) 
-        )
-        spec.input(
-            'constrained_kinds', 
-            valid_type=List, 
-            required=False,
-            default=None,
-            help="If provided, only apply constraints to kinds matching the provided symbols (e.g., `Co`)"
-        )
 
         spec.inputs.validator = cls.validate_inputs
 
+        spec.expose_inputs(
+            PwConstrainedWorkChain
+            namespace="constraints",
+            exclude=("quantumespresso",),
+            namespace_options={"validator": None},
+        )
         spec.expose_inputs(
             PwBaseWorkChain,
             namespace="quantumespresso",
@@ -291,12 +283,10 @@ class AbInitioLabellingWorkChain(WorkChain):
             
             # Submit a constrained magnetization work chain
             if self.inputs.lambda_series:
-                constrained_inputs = AttributeDict()
+                constrained_inputs = self.inputs.constraints.get_dict()
                 if "clean_workdir" in inputs:
                     constrained_inputs.clean_workdir = inputs.pop('clean_workdir')
                 constrained_inputs.quantumespresso = inputs
-                constrained_inputs.lambda_series = self.inputs.lambda_series
-                constrained_inputs.constrained_kinds = self.inputs.constrained_kinds
                 constrained_inputs = prepare_process_inputs(PwConstrainedWorkChain, constrained_inputs)
                 future = self.submit(PwConstrainedWorkChain, **constrained_inputs)
                 self.report(f"Launched PwConstrainedWorkChain for configuration {self.ctx.config} <{future.pk}>")
