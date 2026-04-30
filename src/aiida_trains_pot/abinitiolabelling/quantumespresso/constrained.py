@@ -47,8 +47,8 @@ class PwConstrainedWorkChain(WorkChain):
         spec.input(
            'return_uncorrelated',
             valid_type = orm.Bool,
-            default = lambda: orm.Bool(False)
-            help = 'If `True`, only return the first and last converged calculations to avoid highly correlated data.' 
+            default = lambda: orm.Bool(True)
+            help = 'If `True`, return only the last converged calculation to avoid highly correlated datasets.' 
         )        
 
         spec.inputs.validator = cls.validate_inputs
@@ -163,15 +163,14 @@ class PwConstrainedWorkChain(WorkChain):
         """Output the results of each completed PwBaseWorkChain."""
         out = {}
         for ii, workchain in enumerate(self.ctx.base_workchains):
-
-            if self.inputs.return_uncorrelated.value:
-                # Return only the first and last calculations
-                if 0 < ii < len(self.ctx.base_workchains)-1:
-                    continue
-
             if workchain.is_finished_ok:
                 out[f'lambda_{ii}'] = {name: workchain.outputs[name] for name in workchain.outputs}
 
+        # Only return the last calculation to converge
+        if self.inputs.return_uncorrelated.value and len(out) > 1:
+            for key in list(out.keys())[:-1]
+                out.pop(key)       
+ 
         self.out(f'converged_workchains', out)
 
     def on_terminated(self):
