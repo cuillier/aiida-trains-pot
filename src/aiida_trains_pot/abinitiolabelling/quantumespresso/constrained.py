@@ -36,7 +36,7 @@ class PwConstrainedWorkChain(WorkChain):
             valid_type=orm.List, 
             required=False,
             default=None,
-            help="If provided, only apply constraints to kinds matching the provided symbols (e.g., `Co`)"
+            help="If provided, only apply constraints to kinds matching the provided symbols (e.g., `Co`)",
         )
         spec.input(
             'clean_workdir',
@@ -47,8 +47,8 @@ class PwConstrainedWorkChain(WorkChain):
         spec.input(
            'return_uncorrelated',
             valid_type = orm.Bool,
-            default = lambda: orm.Bool(True)
-            help = 'If `True`, return only the last converged calculation to avoid highly correlated datasets.' 
+            default = lambda: orm.Bool(True),
+            help = "If `True`, return only the last converged calculation to avoid highly correlated datasets.",
         )        
 
         spec.inputs.validator = cls.validate_inputs
@@ -168,7 +168,7 @@ class PwConstrainedWorkChain(WorkChain):
 
         # Only return the last calculation to converge
         if self.inputs.return_uncorrelated.value and len(out) > 1:
-            for key in list(out.keys())[:-1]
+            for key in list(out.keys())[:-1]:
                 out.pop(key)       
  
         self.out(f'converged_workchains', out)

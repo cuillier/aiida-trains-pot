@@ -115,7 +115,7 @@ class AbInitioLabellingWorkChain(WorkChain):
         spec.inputs.validator = cls.validate_inputs
 
         spec.expose_inputs(
-            PwConstrainedWorkChain
+            PwConstrainedWorkChain,
             namespace="constraints",
             exclude=("quantumespresso",),
             namespace_options={"validator": None},
