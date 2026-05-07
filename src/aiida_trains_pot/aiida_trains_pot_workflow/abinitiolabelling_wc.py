@@ -282,8 +282,8 @@ class AbInitioLabellingWorkChain(WorkChain):
             inputs.pw.parameters = Dict(recursive_merge(default_inputs, inputs.pw.parameters.get_dict()))
             
             # Submit a constrained magnetization work chain
-            if self.inputs.lambda_series:
-                constrained_inputs = self.inputs.constraints.get_dict()
+            if "constrained_magnetization" in inputs.pw.parameters.get_dict()["SYSTEM"].keys():
+                constrained_inputs = AttributeDict(self.exposed_inputs(PwConstrainedWorkChain, namespace="constraints"))
                 if "clean_workdir" in inputs:
                     constrained_inputs.clean_workdir = inputs.pop('clean_workdir')
                 constrained_inputs.quantumespresso = inputs
@@ -291,7 +291,7 @@ class AbInitioLabellingWorkChain(WorkChain):
                 future = self.submit(PwConstrainedWorkChain, **constrained_inputs)
                 self.report(f"Launched PwConstrainedWorkChain for configuration {self.ctx.config} <{future.pk}>")
             # Submit a normal pw.x work chain
-            else:  
+            else:
                 inputs = prepare_process_inputs(PwBaseWorkChain, inputs)
                 future = self.submit(PwBaseWorkChain, **inputs)
                 self.report(f"Launched PwBaseWorkChain for configuration {self.ctx.config} <{future.pk}>")
